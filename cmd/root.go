@@ -449,6 +449,17 @@ func initConfig() {
 		fmt.Println("Using config file:", viper.ConfigFileUsed())
 	}
 
+	common.DonationAddress = viper.GetString("donation-address")
+
+	if common.DonationAddress != "" {
+		if !strings.HasPrefix(common.DonationAddress, "u") {
+			common.Log.Fatal("donation-address must be a Zcash UA address, generate it with a recent wallet")
+		}
+		if len(common.DonationAddress) > 255 {
+			common.Log.Fatal("donation-address must be less than 256 characters")
+		}
+		common.Log.Info("Instance donation address: ", common.DonationAddress)
+	}
 }
 
 func startHTTPServer(opts *common.Options) {
