@@ -137,6 +137,9 @@ func TestGetLightdInfo(t *testing.T) {
 	testT = t
 	RawRequest = getLightdInfoStub
 	Time.Sleep = sleepStub
+	Time.Now = time.Now
+	// Clear any cached LightdInfo from previous tests
+	lightdInfoCache = nil
 	// This calls the getblockchaininfo rpc just to establish connectivity with zcashd
 	FirstRPC()
 
