@@ -6,6 +6,19 @@ and this library adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The most recent changes are listed first.
 
+## [Unreleased]
+
+### Added
+
+- Add a disk-persisted cache for `GetTreeState` replies, to avoid repeating
+  `z_gettreestate` calls to the backend for heights that have already been
+  requested. Tree states at least 100 blocks deep are cached indefinitely;
+  more recent ones get a short TTL so reorgs are picked up. Entries are stored
+  sparsely, with checksums, and the cache clears itself if corruption is
+  detected. The window is controlled by `--treestate-cache-window`, which
+  defaults to 525600 blocks (roughly a year); pass 0 to disable it. The cache
+  is not used when the block cache is disabled with `--nocache`.
+
 ## [0.5.1] - 2026-07-27
 
 ### Added
