@@ -39,27 +39,28 @@ var rootCmd = &cobra.Command{
          bandwidth-efficient interface to the Zcash blockchain`,
 	Run: func(cmd *cobra.Command, args []string) {
 		opts := &common.Options{
-			GRPCBindAddr:        viper.GetString("grpc-bind-addr"),
-			GRPCLogging:         viper.GetBool("grpc-logging-insecure"),
-			HTTPBindAddr:        viper.GetString("http-bind-addr"),
-			TLSCertPath:         viper.GetString("tls-cert"),
-			TLSKeyPath:          viper.GetString("tls-key"),
-			LogLevel:            viper.GetUint64("log-level"),
-			LogFile:             viper.GetString("log-file"),
-			ZcashConfPath:       viper.GetString("zcash-conf-path"),
-			RPCUser:             viper.GetString("rpcuser"),
-			RPCPassword:         viper.GetString("rpcpassword"),
-			RPCHost:             viper.GetString("rpchost"),
-			RPCPort:             viper.GetString("rpcport"),
-			NoTLSVeryInsecure:   viper.GetBool("no-tls-very-insecure"),
-			GenCertVeryInsecure: viper.GetBool("gen-cert-very-insecure"),
-			DataDir:             viper.GetString("data-dir"),
-			Redownload:          viper.GetBool("redownload"),
-			NoCache:             viper.GetBool("nocache"),
-			SyncFromHeight:      viper.GetInt("sync-from-height"),
-			PingEnable:          viper.GetBool("ping-very-insecure"),
-			Darkside:            viper.GetBool("darkside-very-insecure"),
-			DarksideTimeout:     viper.GetUint64("darkside-timeout"),
+			GRPCBindAddr:         viper.GetString("grpc-bind-addr"),
+			GRPCLogging:          viper.GetBool("grpc-logging-insecure"),
+			HTTPBindAddr:         viper.GetString("http-bind-addr"),
+			TLSCertPath:          viper.GetString("tls-cert"),
+			TLSKeyPath:           viper.GetString("tls-key"),
+			LogLevel:             viper.GetUint64("log-level"),
+			LogFile:              viper.GetString("log-file"),
+			ZcashConfPath:        viper.GetString("zcash-conf-path"),
+			RPCUser:              viper.GetString("rpcuser"),
+			RPCPassword:          viper.GetString("rpcpassword"),
+			RPCHost:              viper.GetString("rpchost"),
+			RPCPort:              viper.GetString("rpcport"),
+			NoTLSVeryInsecure:    viper.GetBool("no-tls-very-insecure"),
+			GenCertVeryInsecure:  viper.GetBool("gen-cert-very-insecure"),
+			DataDir:              viper.GetString("data-dir"),
+			Redownload:           viper.GetBool("redownload"),
+			NoCache:              viper.GetBool("nocache"),
+			SyncFromHeight:       viper.GetInt("sync-from-height"),
+			PingEnable:           viper.GetBool("ping-very-insecure"),
+			Darkside:             viper.GetBool("darkside-very-insecure"),
+			DarksideTimeout:      viper.GetUint64("darkside-timeout"),
+			TreeStateCacheWindow: viper.GetInt("treestate-cache-window"),
 		}
 
 		common.Log.Debugf("Options: %#v\n", opts)
@@ -246,6 +247,7 @@ func startServer(opts *common.Options) error {
 		os.Exit(1)
 	}
 	var cache *common.BlockCache
+	var treeStateCache *common.TreeStateCache
 	if opts.NoCache {
 		lengthsName, blocksName := common.DbFileNames(dbPath, chainName)
 		os.Remove(lengthsName)
@@ -256,6 +258,20 @@ func startServer(opts *common.Options) error {
 			syncFromHeight = 0
 		}
 		cache = common.NewBlockCache(dbPath, chainName, saplingHeight, syncFromHeight)
+
+		// Initialize tree state cache if enabled
+		if opts.TreeStateCacheWindow > 0 {
+			currentHeight := cache.GetLatestHeight()
+			if currentHeight < 0 {
+				currentHeight = saplingHeight
+			}
+			treeStateCache = common.NewTreeStateCache(dbPath, chainName, opts.TreeStateCacheWindow, currentHeight)
+			if treeStateCache != nil {
+				common.Log.Info("TreeStateCache enabled with window of ", opts.TreeStateCacheWindow, " blocks")
+				// Register for reorg notifications from BlockIngestor
+				common.SetIngestorTreeStateCache(treeStateCache)
+			}
+		}
 	}
 	if !opts.Darkside {
 		if !opts.NoCache {
@@ -268,7 +284,7 @@ func startServer(opts *common.Options) error {
 
 	// Compact transaction service initialization
 	{
-		service, err := frontend.NewLwdStreamer(cache, chainName, opts.PingEnable)
+		service, err := frontend.NewLwdStreamer(cache, treeStateCache, chainName, opts.PingEnable)
 		if err != nil {
 			common.Log.WithFields(logrus.Fields{
 				"error": err,
@@ -303,6 +319,9 @@ func startServer(opts *common.Options) error {
 	go func() {
 		s := <-signals
 		cache.Sync()
+		if treeStateCache != nil {
+			treeStateCache.Sync()
+		}
 		common.Log.WithFields(logrus.Fields{
 			"signal": s.String(),
 		}).Info("caught signal, stopping gRPC server")
@@ -353,6 +372,7 @@ func init() {
 	rootCmd.Flags().Bool("darkside-very-insecure", false, "run with GRPC-controllable mock zebrad for integration testing (shuts down after 30 minutes)")
 	rootCmd.Flags().Int("darkside-timeout", 30, "override 30 minute default darkside timeout")
 	rootCmd.Flags().String("donation-address", "", "Zcash UA address to accept donations for operating this server")
+	rootCmd.Flags().Int("treestate-cache-window", 525600, "number of recent blocks to cache tree states for (0 to disable, default ~1 year)")
 
 	viper.BindPFlag("grpc-bind-addr", rootCmd.Flags().Lookup("grpc-bind-addr"))
 	viper.SetDefault("grpc-bind-addr", "127.0.0.1:9067")
@@ -393,6 +413,8 @@ func init() {
 	viper.BindPFlag("darkside-timeout", rootCmd.Flags().Lookup("darkside-timeout"))
 	viper.SetDefault("darkside-timeout", 30)
 	viper.BindPFlag("donation-address", rootCmd.Flags().Lookup("donation-address"))
+	viper.BindPFlag("treestate-cache-window", rootCmd.Flags().Lookup("treestate-cache-window"))
+	viper.SetDefault("treestate-cache-window", 525600)
 
 	logger.SetFormatter(&logrus.TextFormatter{
 		//DisableColors:          true,

@@ -20,6 +20,7 @@ import (
 	"github.com/zcash/lightwalletd/walletrpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // 'make build' will overwrite this string with the output of git-describe (tag)
@@ -34,27 +35,28 @@ var (
 )
 
 type Options struct {
-	GRPCBindAddr        string `json:"grpc_bind_address,omitempty"`
-	GRPCLogging         bool   `json:"grpc_logging_insecure,omitempty"`
-	HTTPBindAddr        string `json:"http_bind_address,omitempty"`
-	TLSCertPath         string `json:"tls_cert_path,omitempty"`
-	TLSKeyPath          string `json:"tls_cert_key,omitempty"`
-	LogLevel            uint64 `json:"log_level,omitempty"`
-	LogFile             string `json:"log_file,omitempty"`
-	ZcashConfPath       string `json:"zcash_conf,omitempty"`
-	RPCUser             string `json:"rpcuser"`
-	RPCPassword         string `json:"rpcpassword"`
-	RPCHost             string `json:"rpchost"`
-	RPCPort             string `json:"rpcport"`
-	NoTLSVeryInsecure   bool   `json:"no_tls_very_insecure,omitempty"`
-	GenCertVeryInsecure bool   `json:"gen_cert_very_insecure,omitempty"`
-	Redownload          bool   `json:"redownload"`
-	NoCache             bool   `json:"nocache"`
-	SyncFromHeight      int    `json:"sync_from_height"`
-	DataDir             string `json:"data_dir"`
-	PingEnable          bool   `json:"ping_enable"`
-	Darkside            bool   `json:"darkside"`
-	DarksideTimeout     uint64 `json:"darkside_timeout"`
+	GRPCBindAddr          string `json:"grpc_bind_address,omitempty"`
+	GRPCLogging           bool   `json:"grpc_logging_insecure,omitempty"`
+	HTTPBindAddr          string `json:"http_bind_address,omitempty"`
+	TLSCertPath           string `json:"tls_cert_path,omitempty"`
+	TLSKeyPath            string `json:"tls_cert_key,omitempty"`
+	LogLevel              uint64 `json:"log_level,omitempty"`
+	LogFile               string `json:"log_file,omitempty"`
+	ZcashConfPath         string `json:"zcash_conf,omitempty"`
+	RPCUser               string `json:"rpcuser"`
+	RPCPassword           string `json:"rpcpassword"`
+	RPCHost               string `json:"rpchost"`
+	RPCPort               string `json:"rpcport"`
+	NoTLSVeryInsecure     bool   `json:"no_tls_very_insecure,omitempty"`
+	GenCertVeryInsecure   bool   `json:"gen_cert_very_insecure,omitempty"`
+	Redownload            bool   `json:"redownload"`
+	NoCache               bool   `json:"nocache"`
+	SyncFromHeight        int    `json:"sync_from_height"`
+	DataDir               string `json:"data_dir"`
+	PingEnable            bool   `json:"ping_enable"`
+	Darkside              bool   `json:"darkside"`
+	DarksideTimeout       uint64 `json:"darkside_timeout"`
+	TreeStateCacheWindow  int    `json:"treestate_cache_window"` // blocks to cache tree states (0 = disabled, default ~1 year)
 }
 
 // RawRequest points to the function to send an RPC request to zcashd;
@@ -269,9 +271,9 @@ func GetLightdInfo() (*walletrpc.LightdInfo, error) {
 	lightdInfoCacheMutex.RLock()
 	if lightdInfoCache != nil && Time.Now().Sub(lightdInfoCacheTime) < lightdInfoCacheTTL {
 		// Return a copy so callers can't modify cached data
-		info := *lightdInfoCache
+		info := proto.Clone(lightdInfoCache).(*walletrpc.LightdInfo)
 		lightdInfoCacheMutex.RUnlock()
-		return &info, nil
+		return info, nil
 	}
 	lightdInfoCacheMutex.RUnlock()
 
@@ -341,8 +343,7 @@ func GetLightdInfo() (*walletrpc.LightdInfo, error) {
 	lightdInfoCacheMutex.Unlock()
 
 	// Return a copy so callers can't modify cached data
-	infoCopy := *info
-	return &infoCopy, nil
+	return proto.Clone(info).(*walletrpc.LightdInfo), nil
 }
 
 func getBlockFromRPC(height int) (*walletrpc.CompactBlock, error) {
@@ -429,9 +430,15 @@ func getBlockFromRPC(height int) (*walletrpc.CompactBlock, error) {
 }
 
 var (
-	ingestorRunning  bool
-	stopIngestorChan = make(chan struct{})
+	ingestorRunning   bool
+	stopIngestorChan  = make(chan struct{})
+	ingestorTreeCache *TreeStateCache // for reorg notifications
 )
+
+// SetIngestorTreeStateCache sets the TreeStateCache that will be notified on reorgs.
+func SetIngestorTreeStateCache(tsc *TreeStateCache) {
+	ingestorTreeCache = tsc
+}
 
 func startIngestor(c *BlockCache) {
 	if !ingestorRunning {
@@ -516,6 +523,9 @@ func BlockIngestor(c *BlockCache, rep int) {
 		}
 		Log.Info("REORG: dropping block ", height-1, " ", displayHash(c.GetLatestHash()))
 		c.Reorg(height - 1)
+		if ingestorTreeCache != nil {
+			ingestorTreeCache.Reorg(height - 1)
+		}
 	}
 }
 

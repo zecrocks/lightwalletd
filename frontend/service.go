@@ -29,16 +29,17 @@ import (
 )
 
 type lwdStreamer struct {
-	cache      *common.BlockCache
-	chainName  string
-	pingEnable bool
-	mutex      sync.Mutex
+	cache          *common.BlockCache
+	treeStateCache *common.TreeStateCache
+	chainName      string
+	pingEnable     bool
+	mutex          sync.Mutex
 	walletrpc.UnimplementedCompactTxStreamerServer
 }
 
 // NewLwdStreamer constructs a gRPC context.
-func NewLwdStreamer(cache *common.BlockCache, chainName string, enablePing bool) (walletrpc.CompactTxStreamerServer, error) {
-	return &lwdStreamer{cache: cache, chainName: chainName, pingEnable: enablePing}, nil
+func NewLwdStreamer(cache *common.BlockCache, treeStateCache *common.TreeStateCache, chainName string, enablePing bool) (walletrpc.CompactTxStreamerServer, error) {
+	return &lwdStreamer{cache: cache, treeStateCache: treeStateCache, chainName: chainName, pingEnable: enablePing}, nil
 }
 
 // DarksideStreamer holds the gRPC state for darksidewalletd.
@@ -303,6 +304,24 @@ func (s *lwdStreamer) GetTreeState(ctx context.Context, id *walletrpc.BlockID) (
 		return nil, status.Error(codes.InvalidArgument,
 			"GetTreeState: must specify a block height or ID (hash)")
 	}
+
+	// Check cache first (if enabled)
+	if s.treeStateCache != nil {
+		currentTip := s.cache.GetLatestHeight()
+		if id.Height > 0 {
+			if cached := s.treeStateCache.Get(id.Height, currentTip); cached != nil {
+				common.Log.Debugf("gRPC GetTreeState(height=%d) - cache hit\n", id.Height)
+				return cached, nil
+			}
+		} else if id.Hash != nil {
+			hash := hex.EncodeToString(id.Hash)
+			if cached := s.treeStateCache.GetByHash(hash, currentTip); cached != nil {
+				common.Log.Debugf("gRPC GetTreeState(hash=%s) - cache hit\n", hash)
+				return cached, nil
+			}
+		}
+	}
+
 	// The Zcash z_gettreestate rpc accepts either a block height or block hash
 	params := make([]json.RawMessage, 1)
 	var hashJSON []byte
@@ -362,6 +381,14 @@ func (s *lwdStreamer) GetTreeState(ctx context.Context, id *walletrpc.BlockID) (
 		SaplingTree: gettreestateReply.Sapling.Commitments.FinalState,
 		OrchardTree: gettreestateReply.Orchard.Commitments.FinalState,
 	}
+
+	// Cache the result (if within window)
+	if s.treeStateCache != nil {
+		if err := s.treeStateCache.Put(r); err != nil {
+			common.Log.Debugf("TreeStateCache: failed to cache height %d: %s", r.Height, err.Error())
+		}
+	}
+
 	common.Log.Tracef("  return: %+v\n", r)
 	return r, nil
 }

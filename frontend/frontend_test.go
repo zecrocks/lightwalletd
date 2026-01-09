@@ -40,7 +40,7 @@ const (
 func testsetup() (walletrpc.CompactTxStreamerServer, *common.BlockCache) {
 	os.RemoveAll(unitTestPath)
 	cache := common.NewBlockCache(unitTestPath, unitTestChain, 380640, 0)
-	lwd, err := NewLwdStreamer(cache, "main", false /* enablePing */)
+	lwd, err := NewLwdStreamer(cache, nil /* treeStateCache */, "main", false /* enablePing */)
 	if err != nil {
 		os.Stderr.WriteString(fmt.Sprint("NewLwdStreamer failed:", err))
 		os.Exit(1)
