@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -74,6 +75,14 @@ var Time struct {
 
 // Log as a global variable simplifies logging
 var Log *logrus.Entry
+
+// LightdInfo cache - avoid repeated RPC calls for server info
+var (
+	lightdInfoCache      *walletrpc.LightdInfo
+	lightdInfoCacheTime  time.Time
+	lightdInfoCacheTTL   = 5 * time.Second // server status doesn't need real-time updates
+	lightdInfoCacheMutex sync.RWMutex
+)
 
 // The following are JSON zcashd rpc requests and replies.
 type (
@@ -256,6 +265,17 @@ func GetBlockChainInfo() (*ZcashdRpcReplyGetblockchaininfo, error) {
 }
 
 func GetLightdInfo() (*walletrpc.LightdInfo, error) {
+	// Check cache first
+	lightdInfoCacheMutex.RLock()
+	if lightdInfoCache != nil && Time.Now().Sub(lightdInfoCacheTime) < lightdInfoCacheTTL {
+		// Return a copy so callers can't modify cached data
+		info := *lightdInfoCache
+		lightdInfoCacheMutex.RUnlock()
+		return &info, nil
+	}
+	lightdInfoCacheMutex.RUnlock()
+
+	// Cache miss or expired - fetch from zcashd
 	result, rpcErr := RawRequest("getinfo", []json.RawMessage{})
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -294,7 +314,7 @@ func GetLightdInfo() (*walletrpc.LightdInfo, error) {
 	if DarksideEnabled {
 		vendor = "ECC DarksideWalletD"
 	}
-	return &walletrpc.LightdInfo{
+	info := &walletrpc.LightdInfo{
 		Version:                 Version,
 		Vendor:                  vendor,
 		TaddrSupport:            true,
@@ -312,7 +332,17 @@ func GetLightdInfo() (*walletrpc.LightdInfo, error) {
 		DonationAddress:         DonationAddress,
 		UpgradeName:             upgrade.Name,
 		UpgradeHeight:           uint64(upgrade.ActivationHeight),
-	}, nil
+	}
+
+	// Update cache
+	lightdInfoCacheMutex.Lock()
+	lightdInfoCache = info
+	lightdInfoCacheTime = Time.Now()
+	lightdInfoCacheMutex.Unlock()
+
+	// Return a copy so callers can't modify cached data
+	infoCopy := *info
+	return &infoCopy, nil
 }
 
 func getBlockFromRPC(height int) (*walletrpc.CompactBlock, error) {
