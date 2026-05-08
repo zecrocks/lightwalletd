@@ -5,6 +5,7 @@
 package common
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -570,9 +571,17 @@ func filterBlockPool(vtx []*walletrpc.CompactTx, poolTypes []walletrpc.PoolType)
 }
 
 // GetBlockRange returns a sequence of consecutive blocks in the given range.
-func GetBlockRange(cache *BlockCache, blockOut chan<- *walletrpc.CompactBlock, errOut chan<- error, span *walletrpc.BlockRange) {
+//
+// The `ctx` parameter is used to abort iteration when the gRPC client cancels
+// the stream. Without it, the producer goroutine would block indefinitely on
+// the unbuffered `blockOut` send after the consumer (the gRPC handler) returns,
+// leaking one goroutine per cancelled stream.
+func GetBlockRange(ctx context.Context, cache *BlockCache, blockOut chan<- *walletrpc.CompactBlock, errOut chan<- error, span *walletrpc.BlockRange) {
 	if slices.Contains(span.PoolTypes, walletrpc.PoolType_POOL_TYPE_INVALID) {
-		errOut <- fmt.Errorf("GetBlockRange: invalid pool type requested")
+		select {
+		case errOut <- fmt.Errorf("GetBlockRange: invalid pool type requested"):
+		case <-ctx.Done():
+		}
 		return
 	}
 	// Go over [start, end] inclusive
@@ -591,16 +600,26 @@ func GetBlockRange(cache *BlockCache, blockOut chan<- *walletrpc.CompactBlock, e
 
 		block, err := GetBlock(cache, j)
 		if err != nil {
-			errOut <- err
+			select {
+			case errOut <- err:
+			case <-ctx.Done():
+			}
 			return
 		}
 		block.Vtx = filterBlockPool(block.Vtx, span.PoolTypes)
 
 		// Note that we do want to return blocks that have had all of its transactions filtered,
 		// as we have done in the past.
-		blockOut <- block
+		select {
+		case blockOut <- block:
+		case <-ctx.Done():
+			return
+		}
 	}
-	errOut <- nil
+	select {
+	case errOut <- nil:
+	case <-ctx.Done():
+	}
 }
 
 // ParseRawTransaction converts between the JSON result of a `zcashd`
