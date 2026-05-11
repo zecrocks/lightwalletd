@@ -229,16 +229,21 @@ func (s *lwdStreamer) GetBlockNullifiers(ctx context.Context, id *walletrpc.Bloc
 // 'end' inclusively.
 func (s *lwdStreamer) GetBlockRange(span *walletrpc.BlockRange, resp walletrpc.CompactTxStreamer_GetBlockRangeServer) error {
 	common.Log.Debugf("gRPC GetBlockRange(%+v)\n", span)
-	blockChan := make(chan *walletrpc.CompactBlock)
 	if span.Start == nil || span.End == nil {
 		return status.Error(codes.InvalidArgument,
 			"GetBlockRange: must specify start and end heights")
 	}
+	ctx := resp.Context()
+	blockChan := make(chan *walletrpc.CompactBlock)
 	errChan := make(chan error)
-	go common.GetBlockRange(s.cache, blockChan, errChan, span)
+	go common.GetBlockRange(ctx, s.cache, blockChan, errChan, span)
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Client cancelled / deadline exceeded; the producer's select-on-ctx
+			// will unblock its in-flight send and exit.
+			return ctx.Err()
 		case err := <-errChan:
 			// this will also catch context.DeadlineExceeded from the timeout
 			return err
@@ -255,7 +260,6 @@ func (s *lwdStreamer) GetBlockRange(span *walletrpc.BlockRange, resp walletrpc.C
 // the actions contain only nullifiers (a subset of the full compact block).
 func (s *lwdStreamer) GetBlockRangeNullifiers(span *walletrpc.BlockRange, resp walletrpc.CompactTxStreamer_GetBlockRangeNullifiersServer) error {
 	common.Log.Debugf("gRPC GetBlockRangeNullifiers(%+v)\n", span)
-	blockChan := make(chan *walletrpc.CompactBlock)
 	if span.Start == nil || span.End == nil {
 		return status.Error(codes.InvalidArgument,
 			"GetBlockRangeNullifiers: must specify start and end heights")
@@ -269,11 +273,17 @@ func (s *lwdStreamer) GetBlockRangeNullifiers(span *walletrpc.BlockRange, resp w
 		}
 	}
 	span.PoolTypes = filtered
+	ctx := resp.Context()
+	blockChan := make(chan *walletrpc.CompactBlock)
 	errChan := make(chan error)
-	go common.GetBlockRange(s.cache, blockChan, errChan, span)
+	go common.GetBlockRange(ctx, s.cache, blockChan, errChan, span)
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Client cancelled / deadline exceeded; the producer's select-on-ctx
+			// will unblock its in-flight send and exit.
+			return ctx.Err()
 		case err := <-errChan:
 			// this will also catch context.DeadlineExceeded from the timeout
 			return err

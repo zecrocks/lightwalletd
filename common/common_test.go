@@ -6,6 +6,7 @@ package common
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -454,7 +455,7 @@ func TestGetBlockRange(t *testing.T) {
 		Start: &walletrpc.BlockID{Height: 380640},
 		End:   &walletrpc.BlockID{Height: 380642},
 	}
-	go GetBlockRange(testcache, blockChan, errChan, blockRange)
+	go GetBlockRange(context.Background(), testcache, blockChan, errChan, blockRange)
 
 	// read in block 380640
 	select {
@@ -557,7 +558,7 @@ func TestGetBlockRangeReverse(t *testing.T) {
 		Start: &walletrpc.BlockID{Height: 380642},
 		End:   &walletrpc.BlockID{Height: 380640},
 	}
-	go GetBlockRange(testcache, blockChan, errChan, blockRange)
+	go GetBlockRange(context.Background(), testcache, blockChan, errChan, blockRange)
 
 	// read in block 380642
 	select {
