@@ -214,6 +214,8 @@ func (s *lwdStreamer) GetBlockNullifiers(ctx context.Context, id *walletrpc.Bloc
 			tx.Actions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
 		}
 		tx.Outputs = nil
+		tx.Vin = nil
+		tx.Vout = nil
 	}
 	// these are not needed (we prefer to save bandwidth)
 	cBlock.ChainMetadata.SaplingCommitmentTreeSize = 0
@@ -227,16 +229,21 @@ func (s *lwdStreamer) GetBlockNullifiers(ctx context.Context, id *walletrpc.Bloc
 // 'end' inclusively.
 func (s *lwdStreamer) GetBlockRange(span *walletrpc.BlockRange, resp walletrpc.CompactTxStreamer_GetBlockRangeServer) error {
 	common.Log.Debugf("gRPC GetBlockRange(%+v)\n", span)
-	blockChan := make(chan *walletrpc.CompactBlock)
 	if span.Start == nil || span.End == nil {
 		return status.Error(codes.InvalidArgument,
 			"GetBlockRange: must specify start and end heights")
 	}
+	ctx := resp.Context()
+	blockChan := make(chan *walletrpc.CompactBlock)
 	errChan := make(chan error)
-	go common.GetBlockRange(s.cache, blockChan, errChan, span)
+	go common.GetBlockRange(ctx, s.cache, blockChan, errChan, span)
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Client cancelled / deadline exceeded; the producer's select-on-ctx
+			// will unblock its in-flight send and exit.
+			return ctx.Err()
 		case err := <-errChan:
 			// this will also catch context.DeadlineExceeded from the timeout
 			return err
@@ -253,7 +260,6 @@ func (s *lwdStreamer) GetBlockRange(span *walletrpc.BlockRange, resp walletrpc.C
 // the actions contain only nullifiers (a subset of the full compact block).
 func (s *lwdStreamer) GetBlockRangeNullifiers(span *walletrpc.BlockRange, resp walletrpc.CompactTxStreamer_GetBlockRangeNullifiersServer) error {
 	common.Log.Debugf("gRPC GetBlockRangeNullifiers(%+v)\n", span)
-	blockChan := make(chan *walletrpc.CompactBlock)
 	if span.Start == nil || span.End == nil {
 		return status.Error(codes.InvalidArgument,
 			"GetBlockRangeNullifiers: must specify start and end heights")
@@ -267,11 +273,17 @@ func (s *lwdStreamer) GetBlockRangeNullifiers(span *walletrpc.BlockRange, resp w
 		}
 	}
 	span.PoolTypes = filtered
+	ctx := resp.Context()
+	blockChan := make(chan *walletrpc.CompactBlock)
 	errChan := make(chan error)
-	go common.GetBlockRange(s.cache, blockChan, errChan, span)
+	go common.GetBlockRange(ctx, s.cache, blockChan, errChan, span)
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Client cancelled / deadline exceeded; the producer's select-on-ctx
+			// will unblock its in-flight send and exit.
+			return ctx.Err()
 		case err := <-errChan:
 			// this will also catch context.DeadlineExceeded from the timeout
 			return err
@@ -1055,6 +1067,21 @@ func (s *DarksideStreamer) AddAddressUtxo(ctx context.Context, arg *walletrpc.Ge
 // ClearAddressUtxo removes the list of cached utxo entries
 func (s *DarksideStreamer) ClearAddressUtxo(ctx context.Context, arg *walletrpc.Empty) (*walletrpc.Empty, error) {
 	err := common.DarksideClearAddressUtxos()
+	return &walletrpc.Empty{}, err
+}
+
+// AddAddressTransaction adds a (address, transaction, height) entry returned by GetTaddressTransactions
+func (s *DarksideStreamer) AddAddressTransaction(ctx context.Context, arg *walletrpc.DarksideAddressTransaction) (*walletrpc.Empty, error) {
+	err := common.DarksideAddAddressTransaction(arg)
+	if err != nil {
+		return nil, status.Errorf(codes.Unknown, "AddAddressTransaction failed: %s", err.Error())
+	}
+	return &walletrpc.Empty{}, nil
+}
+
+// ClearAddressTransactions clears the list of address transaction entries
+func (s *DarksideStreamer) ClearAddressTransactions(ctx context.Context, arg *walletrpc.Empty) (*walletrpc.Empty, error) {
+	err := common.DarksideClearAddressTransactions()
 	return &walletrpc.Empty{}, err
 }
 
