@@ -337,6 +337,15 @@ func (s *lwdStreamer) GetTreeState(ctx context.Context, id *walletrpc.BlockID) (
 	}
 	var gettreestateReply common.ZcashdRpcReplyGettreestate
 	for {
+		// Hygiene companion to PR #560: observe client cancel between
+		// RawRequest calls. In practice this loop terminates in one iteration
+		// on the active chain because zcashd's z_gettreestate hard-stops the
+		// SkipHash walk at the Sapling activation height (zcashd
+		// src/rpc/blockchain.cpp:1411). This check is for symmetry with the
+		// other streaming-RPC ctx-checks, not for DoS defense.
+		if err := ctx.Err(); err != nil {
+			return nil, status.FromContextError(err).Err()
+		}
 		result, rpcErr := common.RawRequest("z_gettreestate", params)
 		if rpcErr != nil {
 			return nil, status.Errorf(codes.InvalidArgument,
@@ -571,7 +580,7 @@ func (s *lwdStreamer) GetTaddressBalanceStream(addresses walletrpc.CompactTxStre
 
 func (s *lwdStreamer) GetMempoolStream(_empty *walletrpc.Empty, resp walletrpc.CompactTxStreamer_GetMempoolStreamServer) error {
 	common.Log.Debugf("gRPC GetMempoolStream()\n")
-	err := common.GetMempool(func(tx *walletrpc.RawTransaction) error {
+	err := common.GetMempool(resp.Context(), func(tx *walletrpc.RawTransaction) error {
 		return resp.Send(tx)
 	})
 	return err
@@ -866,6 +875,13 @@ func (s *lwdStreamer) GetSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, resp wa
 			"GetSubtreeRoots: failed to unmarshal z_getsubtreesbyindex reply, error: %s", err.Error())
 	}
 	for i := 0; i < len(reply.Subtrees); i++ {
+		// Observe client cancel between per-subtree GetBlock calls. Each cache
+		// miss issues two zcashd RPCs (getblock by hash + by height) that are
+		// not ctx-aware via common.RawRequest; this check ensures a cancelling
+		// client doesn't keep zcashd busy on a long subtree range.
+		if err := resp.Context().Err(); err != nil {
+			return status.FromContextError(err).Err()
+		}
 		subtree := reply.Subtrees[i]
 		block, err := common.GetBlock(s.cache, subtree.End_height)
 		if block == nil {
