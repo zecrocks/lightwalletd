@@ -12,6 +12,9 @@ The most recent changes are listed first.
 
 - Add debug logging to gRPC entry and exit points.
 
+- Add the `grpc_server_connections_current` Prometheus gauge for active gRPC
+  client connections.
+
 - Add smoke test
 
 - lightwalletd node operators can export a donation address in the
