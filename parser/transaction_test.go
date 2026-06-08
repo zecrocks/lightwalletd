@@ -4,6 +4,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -111,5 +112,99 @@ func TestV5TransactionParser(t *testing.T) {
 		if len(tx.orchardActions) != int(txtestdata.NActionsOrchard) {
 			t.Fatal("NActionsOrchard miscompare")
 		}
+	}
+}
+
+func TestV6TransactionParser(t *testing.T) {
+	rawTxData, err := hex.DecodeString("06000080ffffffffffffffff0000000000000000000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := NewTransaction()
+	rest, err := tx.ParseFromSlice(rawTxData)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("Test did not consume entire buffer, %d remaining", len(rest))
+	}
+	if tx.version != ZIP230_TX_VERSION {
+		t.Fatal("version miscompare")
+	}
+	if tx.nVersionGroupID != ZIP230_VERSION_GROUP_ID {
+		t.Fatal("nVersionGroupId miscompare")
+	}
+	if tx.consensusBranchID != ZIP230_VERSION_GROUP_ID {
+		t.Fatal("consensusBranchID miscompare")
+	}
+	if len(tx.transparentInputs) != 0 {
+		t.Fatal("tx_in_count miscompare")
+	}
+	if len(tx.transparentOutputs) != 0 {
+		t.Fatal("tx_out_count miscompare")
+	}
+	if len(tx.shieldedSpends) != 0 {
+		t.Fatal("NSpendsSapling miscompare")
+	}
+	if len(tx.shieldedOutputs) != 0 {
+		t.Fatal("NOutputsSapling miscompare")
+	}
+	if len(tx.orchardActions) != 0 {
+		t.Fatal("NActionsOrchard miscompare")
+	}
+}
+
+func TestV6TransactionParserSkipsIronwoodBundle(t *testing.T) {
+	var raw bytes.Buffer
+	raw.Write([]byte{
+		0x06, 0x00, 0x00, 0x80, // fOverwintered | version 6
+		0xff, 0xff, 0xff, 0xff, // version group ID
+		0xff, 0xff, 0xff, 0xff, // consensus branch ID
+		0x00, 0x00, 0x00, 0x00, // lock time
+		0x00, 0x00, 0x00, 0x00, // expiry height
+		0x00, // tx_in_count
+		0x00, // tx_out_count
+		0x00, // nShieldedSpend
+		0x00, // nShieldedOutput
+	})
+	appendOrchardLikeBundle(&raw, 1)
+	appendOrchardLikeBundle(&raw, 1)
+	raw.Write([]byte{0xaa, 0xbb})
+
+	tx := NewTransaction()
+	rest, err := tx.ParseFromSlice(raw.Bytes())
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(rest) != 2 {
+		t.Fatalf("expected two trailing bytes, got %d", len(rest))
+	}
+	if !bytes.Equal(rest, []byte{0xaa, 0xbb}) {
+		t.Fatal("trailing bytes miscompare")
+	}
+	if len(tx.orchardActions) != 1 {
+		t.Fatal("NActionsOrchard miscompare")
+	}
+	if len(tx.ToCompact(0).Actions) != 1 {
+		t.Fatal("compact orchard action count miscompare")
+	}
+	if len(tx.rawBytes) != raw.Len()-len(rest) {
+		t.Fatal("raw transaction length miscompare")
+	}
+}
+
+func appendOrchardLikeBundle(raw *bytes.Buffer, actionsCount int) {
+	raw.WriteByte(byte(actionsCount))
+	for i := 0; i < actionsCount; i++ {
+		raw.Write(bytes.Repeat([]byte{byte(i + 1)}, 820))
+	}
+	if actionsCount > 0 {
+		raw.WriteByte(0x00)                      // flags
+		raw.Write(make([]byte, 8))               // value balance
+		raw.Write(make([]byte, 32))              // anchor
+		raw.WriteByte(0x00)                      // proofs length
+		raw.Write(make([]byte, 64*actionsCount)) // spend auth signatures
+		raw.Write(make([]byte, 64))              // binding signature
 	}
 }

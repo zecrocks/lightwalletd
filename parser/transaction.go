@@ -528,6 +528,66 @@ func (tx *Transaction) parseV5(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	s, err = tx.parseSaplingBundle([]byte(s))
+	if err != nil {
+		return nil, err
+	}
+
+	var orchardActions []action
+	s, orchardActions, err = parseOrchardActionsBundle([]byte(s), "Orchard")
+	if err != nil {
+		return nil, err
+	}
+	tx.orchardActions = orchardActions
+
+	return s, nil
+}
+
+// parse version 6 transaction data after the nVersionGroupId field.
+func (tx *Transaction) parseV6(data []byte) ([]byte, error) {
+	s := bytestring.String(data)
+	var err error
+	if !s.ReadUint32(&tx.consensusBranchID) {
+		return nil, errors.New("could not read nVersionGroupId")
+	}
+	if tx.nVersionGroupID != ZIP230_VERSION_GROUP_ID {
+		// This shouldn't be possible
+		return nil, fmt.Errorf("version group ID %d must be 0xFFFFFFFF", tx.nVersionGroupID)
+	}
+	if !s.Skip(4) {
+		return nil, errors.New("could not skip nLockTime")
+	}
+	if !s.Skip(4) {
+		return nil, errors.New("could not skip nExpiryHeight")
+	}
+	s, err = tx.ParseTransparent([]byte(s))
+	if err != nil {
+		return nil, err
+	}
+
+	s, err = tx.parseSaplingBundle([]byte(s))
+	if err != nil {
+		return nil, err
+	}
+
+	var orchardActions []action
+	s, orchardActions, err = parseOrchardActionsBundle([]byte(s), "Orchard")
+	if err != nil {
+		return nil, err
+	}
+	tx.orchardActions = orchardActions
+
+	s, _, err = parseOrchardActionsBundle([]byte(s), "Ironwood")
+	if err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (tx *Transaction) parseSaplingBundle(data []byte) ([]byte, error) {
+	s := bytestring.String(data)
+	var err error
 	var spendCount, outputCount int
 	if !s.ReadCompactSize(&spendCount) {
 		return nil, errors.New("could not read nShieldedSpend")
@@ -575,58 +635,67 @@ func (tx *Transaction) parseV5(data []byte) ([]byte, error) {
 	if spendCount+outputCount > 0 && !s.Skip(64) {
 		return nil, errors.New("could not skip bindingSigSapling")
 	}
+
+	return s, nil
+}
+
+func parseOrchardActionsBundle(data []byte, pool string) ([]byte, []action, error) {
+	s := bytestring.String(data)
+	var err error
 	var actionsCount int
 	if !s.ReadCompactSize(&actionsCount) {
-		return nil, errors.New("could not read nActionsOrchard")
+		return nil, nil, fmt.Errorf("could not read nActions%s", pool)
 	}
 	if actionsCount >= (1 << 16) {
-		return nil, fmt.Errorf("actionsCount (%d) must be less than 2^16", actionsCount)
+		return nil, nil, fmt.Errorf("actionsCount (%d) must be less than 2^16", actionsCount)
 	}
-	tx.orchardActions = make([]action, actionsCount)
+	actions := make([]action, actionsCount)
 	for i := 0; i < actionsCount; i++ {
-		a := &tx.orchardActions[i]
+		a := &actions[i]
 		s, err = a.ParseFromSlice([]byte(s))
 		if err != nil {
-			return nil, fmt.Errorf("error parsing orchard action: %w", err)
+			return nil, nil, fmt.Errorf("error parsing %s action: %w", pool, err)
 		}
 	}
 	if actionsCount > 0 {
 		if !s.Skip(1) {
-			return nil, errors.New("could not skip flagsOrchard")
+			return nil, nil, fmt.Errorf("could not skip flags%s", pool)
 		}
 		if !s.Skip(8) {
-			return nil, errors.New("could not skip valueBalanceOrchard")
+			return nil, nil, fmt.Errorf("could not skip valueBalance%s", pool)
 		}
 		if !s.Skip(32) {
-			return nil, errors.New("could not skip anchorOrchard")
+			return nil, nil, fmt.Errorf("could not skip anchor%s", pool)
 		}
 		var proofsCount int
 		if !s.ReadCompactSize(&proofsCount) {
-			return nil, errors.New("could not read sizeProofsOrchard")
+			return nil, nil, fmt.Errorf("could not read sizeProofs%s", pool)
 		}
 		if !s.Skip(proofsCount) {
-			return nil, errors.New("could not skip proofsOrchard")
+			return nil, nil, fmt.Errorf("could not skip proofs%s", pool)
 		}
 		if !s.Skip(64 * actionsCount) {
-			return nil, errors.New("could not skip vSpendAuthSigsOrchard")
+			return nil, nil, fmt.Errorf("could not skip vSpendAuthSigs%s", pool)
 		}
 		if !s.Skip(64) {
-			return nil, errors.New("could not skip bindingSigOrchard")
+			return nil, nil, fmt.Errorf("could not skip bindingSig%s", pool)
 		}
 	}
-	return s, nil
+	return s, actions, nil
 }
 
-// The logic in the following four functions is copied from
+// The logic in the following version helpers is copied from
 // https://github.com/zcash/zcash/blob/master/src/primitives/transaction.h#L811
 
 const OVERWINTER_TX_VERSION uint32 = 3
 const SAPLING_TX_VERSION uint32 = 4
 const ZIP225_TX_VERSION uint32 = 5
+const ZIP230_TX_VERSION uint32 = 6
 
 const OVERWINTER_VERSION_GROUP_ID uint32 = 0x03C48270
 const SAPLING_VERSION_GROUP_ID uint32 = 0x892F2085
 const ZIP225_VERSION_GROUP_ID uint32 = 0x26A7270A
+const ZIP230_VERSION_GROUP_ID uint32 = 0xFFFFFFFF
 
 func (tx *Transaction) isOverwinterV3() bool {
 	return tx.fOverwintered &&
@@ -644,6 +713,12 @@ func (tx *Transaction) isZip225V5() bool {
 	return tx.fOverwintered &&
 		tx.nVersionGroupID == ZIP225_VERSION_GROUP_ID &&
 		tx.version == ZIP225_TX_VERSION
+}
+
+func (tx *Transaction) isZip230V6() bool {
+	return tx.fOverwintered &&
+		tx.nVersionGroupID == ZIP230_VERSION_GROUP_ID &&
+		tx.version == ZIP230_TX_VERSION
 }
 
 func (tx *Transaction) isGroth16Proof() bool {
@@ -675,12 +750,14 @@ func (tx *Transaction) ParseFromSlice(data []byte) ([]byte, error) {
 	}
 
 	if tx.fOverwintered &&
-		!(tx.isOverwinterV3() || tx.isSaplingV4() || tx.isZip225V5()) {
+		!(tx.isOverwinterV3() || tx.isSaplingV4() || tx.isZip225V5() || tx.isZip230V6()) {
 		return nil, errors.New("unknown transaction format")
 	}
 	// parse the main part of the transaction
 	if tx.isZip225V5() {
 		s, err = tx.parseV5([]byte(s))
+	} else if tx.isZip230V6() {
+		s, err = tx.parseV6([]byte(s))
 	} else {
 		s, err = tx.parsePreV5([]byte(s))
 	}
