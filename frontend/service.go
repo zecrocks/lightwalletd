@@ -213,6 +213,9 @@ func (s *lwdStreamer) GetBlockNullifiers(ctx context.Context, id *walletrpc.Bloc
 		for i, action := range tx.Actions {
 			tx.Actions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
 		}
+		for i, action := range tx.IronwoodActions {
+			tx.IronwoodActions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
+		}
 		tx.Outputs = nil
 		tx.Vin = nil
 		tx.Vout = nil
@@ -220,6 +223,7 @@ func (s *lwdStreamer) GetBlockNullifiers(ctx context.Context, id *walletrpc.Bloc
 	// these are not needed (we prefer to save bandwidth)
 	cBlock.ChainMetadata.SaplingCommitmentTreeSize = 0
 	cBlock.ChainMetadata.OrchardCommitmentTreeSize = 0
+	cBlock.ChainMetadata.IronwoodCommitmentTreeSize = 0
 	common.Log.Tracef("  return: %+v\n", cBlock)
 	return cBlock, err
 }
@@ -292,11 +296,15 @@ func (s *lwdStreamer) GetBlockRangeNullifiers(span *walletrpc.BlockRange, resp w
 				for i, action := range tx.Actions {
 					tx.Actions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
 				}
+				for i, action := range tx.IronwoodActions {
+					tx.IronwoodActions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
+				}
 				tx.Outputs = nil
 			}
 			// these are not needed (we prefer to save bandwidth)
 			cBlock.ChainMetadata.SaplingCommitmentTreeSize = 0
 			cBlock.ChainMetadata.OrchardCommitmentTreeSize = 0
+			cBlock.ChainMetadata.IronwoodCommitmentTreeSize = 0
 			if err := resp.Send(cBlock); err != nil {
 				return err
 			}
@@ -374,12 +382,13 @@ func (s *lwdStreamer) GetTreeState(ctx context.Context, id *walletrpc.BlockID) (
 			"GetTreeState: z_gettreestate did not return treestate")
 	}
 	r := &walletrpc.TreeState{
-		Network:     s.chainName,
-		Height:      uint64(gettreestateReply.Height),
-		Hash:        gettreestateReply.Hash,
-		Time:        gettreestateReply.Time,
-		SaplingTree: gettreestateReply.Sapling.Commitments.FinalState,
-		OrchardTree: gettreestateReply.Orchard.Commitments.FinalState,
+		Network:      s.chainName,
+		Height:       uint64(gettreestateReply.Height),
+		Hash:         gettreestateReply.Hash,
+		Time:         gettreestateReply.Time,
+		SaplingTree:  gettreestateReply.Sapling.Commitments.FinalState,
+		OrchardTree:  gettreestateReply.Orchard.Commitments.FinalState,
+		IronwoodTree: gettreestateReply.Ironwood.Commitments.FinalState,
 	}
 	common.Log.Tracef("  return: %+v\n", r)
 	return r, nil
@@ -608,10 +617,11 @@ func (s *lwdStreamer) GetMempoolTx(exclude *walletrpc.GetMempoolTxRequest, resp 
 		return status.Errorf(codes.InvalidArgument, "invalid pool type requested")
 	}
 	if len(exclude.PoolTypes) == 0 {
-		// legacy behavior: return only blocks containing shielded components.
+		// Return all shielded pools when no explicit pool filter is requested.
 		exclude.PoolTypes = []walletrpc.PoolType{
 			walletrpc.PoolType_SAPLING,
 			walletrpc.PoolType_ORCHARD,
+			walletrpc.PoolType_IRONWOOD,
 		}
 	}
 	s.mutex.Lock()
@@ -837,6 +847,7 @@ func (s *lwdStreamer) GetSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, resp wa
 	switch arg.ShieldedProtocol {
 	case walletrpc.ShieldedProtocol_sapling:
 	case walletrpc.ShieldedProtocol_orchard:
+	case walletrpc.ShieldedProtocol_ironwood:
 		break
 	default:
 		return errors.New("unrecognized shielded protocol")
@@ -953,6 +964,7 @@ func (s *DarksideStreamer) Reset(ctx context.Context, ms *walletrpc.DarksideMeta
 		ms.ChainName,
 		ms.StartSaplingCommitmentTreeSize,
 		ms.StartOrchardCommitmentTreeSize,
+		ms.StartIronwoodCommitmentTreeSize,
 	)
 	if err != nil {
 		common.Log.Fatal("Reset failed, error: ", err.Error())
@@ -1104,12 +1116,13 @@ func (s *DarksideStreamer) ClearAddressTransactions(ctx context.Context, arg *wa
 // Adds a tree state to the cached tree states
 func (s *DarksideStreamer) AddTreeState(ctx context.Context, arg *walletrpc.TreeState) (*walletrpc.Empty, error) {
 	tree := common.DarksideTreeState{
-		Network:     arg.Network,
-		Height:      arg.Height,
-		Hash:        arg.Hash,
-		Time:        arg.Time,
-		SaplingTree: arg.SaplingTree,
-		OrchardTree: arg.OrchardTree,
+		Network:      arg.Network,
+		Height:       arg.Height,
+		Hash:         arg.Hash,
+		Time:         arg.Time,
+		SaplingTree:  arg.SaplingTree,
+		OrchardTree:  arg.OrchardTree,
+		IronwoodTree: arg.IronwoodTree,
 	}
 	err := common.DarksideAddTreeState(tree)
 

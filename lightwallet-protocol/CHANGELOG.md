@@ -7,6 +7,13 @@ and this library adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `compact_formats.ChainMetadata.ironwoodCommitmentTreeSize`
+- `compact_formats.CompactTx.ironwoodActions`
+- `service.PoolType.IRONWOOD`
+- `service.TreeState.ironwoodTree`
+- `service.ShieldedProtocol.ironwood`
+
 ## [v0.4.1] - 2026-02-20
 
 ### Added

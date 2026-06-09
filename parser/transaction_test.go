@@ -154,6 +154,9 @@ func TestValarNU7V6TransactionParser(t *testing.T) {
 	if len(tx.orchardActions) != 0 {
 		t.Fatal("NActionsOrchard miscompare")
 	}
+	if len(tx.ironwoodActions) != 0 {
+		t.Fatal("NActionsIronwood miscompare")
+	}
 }
 
 func TestValarNU7V6TransactionParserRejectsOtherConsensusBranchID(t *testing.T) {
@@ -172,7 +175,7 @@ func TestValarNU7V6TransactionParserRejectsOtherConsensusBranchID(t *testing.T) 
 	}
 }
 
-func TestValarNU7V6TransactionParserSkipsIronwoodBundle(t *testing.T) {
+func TestValarNU7V6TransactionParserKeepsIronwoodBundle(t *testing.T) {
 	var raw bytes.Buffer
 	raw.Write([]byte{
 		0x06, 0x00, 0x00, 0x80, // fOverwintered | version 6
@@ -203,8 +206,15 @@ func TestValarNU7V6TransactionParserSkipsIronwoodBundle(t *testing.T) {
 	if len(tx.orchardActions) != 1 {
 		t.Fatal("NActionsOrchard miscompare")
 	}
-	if len(tx.ToCompact(0).Actions) != 1 {
+	if len(tx.ironwoodActions) != 1 {
+		t.Fatal("NActionsIronwood miscompare")
+	}
+	compactTx := tx.ToCompact(0)
+	if len(compactTx.Actions) != 1 {
 		t.Fatal("compact orchard action count miscompare")
+	}
+	if len(compactTx.IronwoodActions) != 1 {
+		t.Fatal("compact ironwood action count miscompare")
 	}
 	if len(tx.rawBytes) != raw.Len()-len(rest) {
 		t.Fatal("raw transaction length miscompare")

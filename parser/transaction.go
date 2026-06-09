@@ -30,7 +30,8 @@ type rawTransaction struct {
 	//joinSplitPubKey     []byte
 	//joinSplitSig        []byte
 	//bindingSigSapling   []byte
-	orchardActions []action
+	orchardActions  []action
+	ironwoodActions []action
 }
 
 // Txin format as described in https://en.bitcoin.it/wiki/Transaction
@@ -394,6 +395,11 @@ func (tx *Transaction) OrchardActionsCount() int {
 	return len(tx.orchardActions)
 }
 
+// IronwoodActionsCount returns the number of Ironwood actions in the transaction.
+func (tx *Transaction) IronwoodActionsCount() int {
+	return len(tx.ironwoodActions)
+}
+
 // ToCompact converts the given (full) transaction to compact format.
 func (tx *Transaction) ToCompact(index int) *walletrpc.CompactTx {
 	// we don't need to store the vin (transparent inputs) of a coinbase tx
@@ -405,11 +411,12 @@ func (tx *Transaction) ToCompact(index int) *walletrpc.CompactTx {
 		Index: uint64(index), // index is contextual
 		Txid:  hash32.ToSlice(tx.GetEncodableHash()),
 		//Fee:     0, // TODO: calculate fees
-		Spends:  make([]*walletrpc.CompactSaplingSpend, len(tx.shieldedSpends)),
-		Outputs: make([]*walletrpc.CompactSaplingOutput, len(tx.shieldedOutputs)),
-		Actions: make([]*walletrpc.CompactOrchardAction, len(tx.orchardActions)),
-		Vin:     make([]*walletrpc.CompactTxIn, vinLen),
-		Vout:    make([]*walletrpc.TxOut, len(tx.transparentOutputs)),
+		Spends:          make([]*walletrpc.CompactSaplingSpend, len(tx.shieldedSpends)),
+		Outputs:         make([]*walletrpc.CompactSaplingOutput, len(tx.shieldedOutputs)),
+		Actions:         make([]*walletrpc.CompactOrchardAction, len(tx.orchardActions)),
+		Vin:             make([]*walletrpc.CompactTxIn, vinLen),
+		Vout:            make([]*walletrpc.TxOut, len(tx.transparentOutputs)),
+		IronwoodActions: make([]*walletrpc.CompactOrchardAction, len(tx.ironwoodActions)),
 	}
 	for i, spend := range tx.shieldedSpends {
 		ctx.Spends[i] = spend.ToCompact()
@@ -419,6 +426,9 @@ func (tx *Transaction) ToCompact(index int) *walletrpc.CompactTx {
 	}
 	for i, a := range tx.orchardActions {
 		ctx.Actions[i] = a.ToCompact()
+	}
+	for i, a := range tx.ironwoodActions {
+		ctx.IronwoodActions[i] = a.ToCompact()
 	}
 	if vinLen > 0 {
 		for i, tinput := range tx.transparentInputs {
@@ -585,10 +595,12 @@ func (tx *Transaction) parseV6(data []byte) ([]byte, error) {
 	}
 	tx.orchardActions = orchardActions
 
-	s, _, err = parseOrchardActionsBundle([]byte(s), "Ironwood")
+	var ironwoodActions []action
+	s, ironwoodActions, err = parseOrchardActionsBundle([]byte(s), "Ironwood")
 	if err != nil {
 		return nil, err
 	}
+	tx.ironwoodActions = ironwoodActions
 
 	return s, nil
 }

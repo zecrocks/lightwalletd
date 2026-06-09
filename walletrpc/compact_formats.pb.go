@@ -27,11 +27,12 @@ const (
 
 // Information about the state of the chain as of a given block.
 type ChainMetadata struct {
-	state                     protoimpl.MessageState `protogen:"open.v1"`
-	SaplingCommitmentTreeSize uint32                 `protobuf:"varint,1,opt,name=saplingCommitmentTreeSize,proto3" json:"saplingCommitmentTreeSize,omitempty"` // the size of the Sapling note commitment tree as of the end of this block
-	OrchardCommitmentTreeSize uint32                 `protobuf:"varint,2,opt,name=orchardCommitmentTreeSize,proto3" json:"orchardCommitmentTreeSize,omitempty"` // the size of the Orchard note commitment tree as of the end of this block
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	SaplingCommitmentTreeSize  uint32                 `protobuf:"varint,1,opt,name=saplingCommitmentTreeSize,proto3" json:"saplingCommitmentTreeSize,omitempty"`   // the size of the Sapling note commitment tree as of the end of this block
+	OrchardCommitmentTreeSize  uint32                 `protobuf:"varint,2,opt,name=orchardCommitmentTreeSize,proto3" json:"orchardCommitmentTreeSize,omitempty"`   // the size of the Orchard note commitment tree as of the end of this block
+	IronwoodCommitmentTreeSize uint32                 `protobuf:"varint,3,opt,name=ironwoodCommitmentTreeSize,proto3" json:"ironwoodCommitmentTreeSize,omitempty"` // the size of the Ironwood note commitment tree as of the end of this block
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *ChainMetadata) Reset() {
@@ -74,6 +75,13 @@ func (x *ChainMetadata) GetSaplingCommitmentTreeSize() uint32 {
 func (x *ChainMetadata) GetOrchardCommitmentTreeSize() uint32 {
 	if x != nil {
 		return x.OrchardCommitmentTreeSize
+	}
+	return 0
+}
+
+func (x *ChainMetadata) GetIronwoodCommitmentTreeSize() uint32 {
+	if x != nil {
+		return x.IronwoodCommitmentTreeSize
 	}
 	return 0
 }
@@ -211,7 +219,8 @@ type CompactTx struct {
 	// unset because the calculation requires reference to prior transactions.
 	// If there are no transparent inputs, the fee will be calculable as:
 	//
-	//	valueBalanceSapling + valueBalanceOrchard + sum(vPubNew) - sum(vPubOld) - sum(tOut)
+	//	valueBalanceSapling + valueBalanceOrchard + valueBalanceIronwood
+	//	+ sum(vPubNew) - sum(vPubOld) - sum(tOut)
 	Fee     uint32                  `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`
 	Spends  []*CompactSaplingSpend  `protobuf:"bytes,4,rep,name=spends,proto3" json:"spends,omitempty"`
 	Outputs []*CompactSaplingOutput `protobuf:"bytes,5,rep,name=outputs,proto3" json:"outputs,omitempty"`
@@ -224,9 +233,12 @@ type CompactTx struct {
 	// first transaction in any block.
 	Vin []*CompactTxIn `protobuf:"bytes,7,rep,name=vin,proto3" json:"vin,omitempty"`
 	// A sequence of transparent outputs being created by the transaction.
-	Vout          []*TxOut `protobuf:"bytes,8,rep,name=vout,proto3" json:"vout,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Vout []*TxOut `protobuf:"bytes,8,rep,name=vout,proto3" json:"vout,omitempty"`
+	// A sequence of Ironwood actions in the transaction. Ironwood reuses the
+	// compact Orchard action shape because the pools have identical action fields.
+	IronwoodActions []*CompactOrchardAction `protobuf:"bytes,9,rep,name=ironwoodActions,proto3" json:"ironwoodActions,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CompactTx) Reset() {
@@ -311,6 +323,13 @@ func (x *CompactTx) GetVin() []*CompactTxIn {
 func (x *CompactTx) GetVout() []*TxOut {
 	if x != nil {
 		return x.Vout
+	}
+	return nil
+}
+
+func (x *CompactTx) GetIronwoodActions() []*CompactOrchardAction {
+	if x != nil {
+		return x.IronwoodActions
 	}
 	return nil
 }
@@ -544,6 +563,9 @@ func (x *CompactSaplingOutput) GetCiphertext() []byte {
 }
 
 // A compact representation of an [Orchard Action](https://zips.z.cash/protocol/protocol.pdf#actionencodingandconsensus).
+//
+// This shape is also used for Ironwood actions because Ironwood action fields
+// are identical to Orchard action fields.
 type CompactOrchardAction struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Nullifier     []byte                 `protobuf:"bytes,1,opt,name=nullifier,proto3" json:"nullifier,omitempty"`       // [32] The nullifier of the input note
@@ -616,10 +638,11 @@ var File_compact_formats_proto protoreflect.FileDescriptor
 
 const file_compact_formats_proto_rawDesc = "" +
 	"\n" +
-	"\x15compact_formats.proto\x12\x15cash.z.wallet.sdk.rpc\"\x8b\x01\n" +
+	"\x15compact_formats.proto\x12\x15cash.z.wallet.sdk.rpc\"\xcb\x01\n" +
 	"\rChainMetadata\x12<\n" +
 	"\x19saplingCommitmentTreeSize\x18\x01 \x01(\rR\x19saplingCommitmentTreeSize\x12<\n" +
-	"\x19orchardCommitmentTreeSize\x18\x02 \x01(\rR\x19orchardCommitmentTreeSize\"\xa6\x02\n" +
+	"\x19orchardCommitmentTreeSize\x18\x02 \x01(\rR\x19orchardCommitmentTreeSize\x12>\n" +
+	"\x1aironwoodCommitmentTreeSize\x18\x03 \x01(\rR\x1aironwoodCommitmentTreeSize\"\xa6\x02\n" +
 	"\fCompactBlock\x12\"\n" +
 	"\fprotoVersion\x18\x01 \x01(\rR\fprotoVersion\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\x04R\x06height\x12\x12\n" +
@@ -628,7 +651,7 @@ const file_compact_formats_proto_rawDesc = "" +
 	"\x04time\x18\x05 \x01(\rR\x04time\x12\x16\n" +
 	"\x06header\x18\x06 \x01(\fR\x06header\x122\n" +
 	"\x03vtx\x18\a \x03(\v2 .cash.z.wallet.sdk.rpc.CompactTxR\x03vtx\x12J\n" +
-	"\rchainMetadata\x18\b \x01(\v2$.cash.z.wallet.sdk.rpc.ChainMetadataR\rchainMetadata\"\x81\x03\n" +
+	"\rchainMetadata\x18\b \x01(\v2$.cash.z.wallet.sdk.rpc.ChainMetadataR\rchainMetadata\"\xd8\x03\n" +
 	"\tCompactTx\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\x04R\x05index\x12\x12\n" +
 	"\x04txid\x18\x02 \x01(\fR\x04txid\x12\x10\n" +
@@ -637,7 +660,8 @@ const file_compact_formats_proto_rawDesc = "" +
 	"\aoutputs\x18\x05 \x03(\v2+.cash.z.wallet.sdk.rpc.CompactSaplingOutputR\aoutputs\x12E\n" +
 	"\aactions\x18\x06 \x03(\v2+.cash.z.wallet.sdk.rpc.CompactOrchardActionR\aactions\x124\n" +
 	"\x03vin\x18\a \x03(\v2\".cash.z.wallet.sdk.rpc.CompactTxInR\x03vin\x120\n" +
-	"\x04vout\x18\b \x03(\v2\x1c.cash.z.wallet.sdk.rpc.TxOutR\x04vout\"S\n" +
+	"\x04vout\x18\b \x03(\v2\x1c.cash.z.wallet.sdk.rpc.TxOutR\x04vout\x12U\n" +
+	"\x0fironwoodActions\x18\t \x03(\v2+.cash.z.wallet.sdk.rpc.CompactOrchardActionR\x0fironwoodActions\"S\n" +
 	"\vCompactTxIn\x12 \n" +
 	"\vprevoutTxid\x18\x01 \x01(\fR\vprevoutTxid\x12\"\n" +
 	"\fprevoutIndex\x18\x02 \x01(\rR\fprevoutIndex\"A\n" +
@@ -691,11 +715,12 @@ var file_compact_formats_proto_depIdxs = []int32{
 	7, // 4: cash.z.wallet.sdk.rpc.CompactTx.actions:type_name -> cash.z.wallet.sdk.rpc.CompactOrchardAction
 	3, // 5: cash.z.wallet.sdk.rpc.CompactTx.vin:type_name -> cash.z.wallet.sdk.rpc.CompactTxIn
 	4, // 6: cash.z.wallet.sdk.rpc.CompactTx.vout:type_name -> cash.z.wallet.sdk.rpc.TxOut
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	7, // 7: cash.z.wallet.sdk.rpc.CompactTx.ironwoodActions:type_name -> cash.z.wallet.sdk.rpc.CompactOrchardAction
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_compact_formats_proto_init() }

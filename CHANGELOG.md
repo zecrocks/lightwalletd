@@ -29,6 +29,9 @@ The most recent changes are listed first.
   shielded, or a combination) of blocks (`GetBlockRange`) and transactions
   (`GetMempoolTx`).
 
+- Add Ironwood compact block, tree state, subtree root, and V6 transaction
+  parsing support.
+
 
 ### Changed
 
