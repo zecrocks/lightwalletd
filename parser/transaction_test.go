@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -115,7 +116,7 @@ func TestV5TransactionParser(t *testing.T) {
 	}
 }
 
-func TestV6TransactionParser(t *testing.T) {
+func TestValarNU7V6TransactionParser(t *testing.T) {
 	rawTxData, err := hex.DecodeString("06000080ffffffffffffffff0000000000000000000000000000")
 	if err != nil {
 		t.Fatal(err)
@@ -129,13 +130,13 @@ func TestV6TransactionParser(t *testing.T) {
 	if len(rest) != 0 {
 		t.Fatalf("Test did not consume entire buffer, %d remaining", len(rest))
 	}
-	if tx.version != ZIP230_TX_VERSION {
+	if tx.version != VALAR_NU7_TX_VERSION {
 		t.Fatal("version miscompare")
 	}
-	if tx.nVersionGroupID != ZIP230_VERSION_GROUP_ID {
+	if tx.nVersionGroupID != VALAR_NU7_VERSION_GROUP_ID {
 		t.Fatal("nVersionGroupId miscompare")
 	}
-	if tx.consensusBranchID != ZIP230_VERSION_GROUP_ID {
+	if tx.consensusBranchID != VALAR_NU7_CONSENSUS_BRANCH_ID {
 		t.Fatal("consensusBranchID miscompare")
 	}
 	if len(tx.transparentInputs) != 0 {
@@ -155,7 +156,23 @@ func TestV6TransactionParser(t *testing.T) {
 	}
 }
 
-func TestV6TransactionParserSkipsIronwoodBundle(t *testing.T) {
+func TestValarNU7V6TransactionParserRejectsOtherConsensusBranchID(t *testing.T) {
+	rawTxData, err := hex.DecodeString("06000080ffffffff000000000000000000000000000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := NewTransaction()
+	_, err = tx.ParseFromSlice(rawTxData)
+	if err == nil {
+		t.Fatal("expected consensus branch ID error")
+	}
+	if !strings.Contains(err.Error(), "consensus branch ID") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValarNU7V6TransactionParserSkipsIronwoodBundle(t *testing.T) {
 	var raw bytes.Buffer
 	raw.Write([]byte{
 		0x06, 0x00, 0x00, 0x80, // fOverwintered | version 6

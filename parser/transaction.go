@@ -511,7 +511,7 @@ func (tx *Transaction) parseV5(data []byte) ([]byte, error) {
 	s := bytestring.String(data)
 	var err error
 	if !s.ReadUint32(&tx.consensusBranchID) {
-		return nil, errors.New("could not read nVersionGroupId")
+		return nil, errors.New("could not read nConsensusBranchId")
 	}
 	if tx.nVersionGroupID != 0x26A7270A {
 		// This shouldn't be possible
@@ -544,15 +544,23 @@ func (tx *Transaction) parseV5(data []byte) ([]byte, error) {
 }
 
 // parse version 6 transaction data after the nVersionGroupId field.
+//
+// This intentionally handles the Valar NU7 V6 layout used by this stack. It is
+// not the ZIP 248 extensible transaction format. After nExpiryHeight, this
+// layout keeps transparent inputs and outputs inline, followed by Sapling,
+// Orchard, and Ironwood bundles.
 func (tx *Transaction) parseV6(data []byte) ([]byte, error) {
 	s := bytestring.String(data)
 	var err error
 	if !s.ReadUint32(&tx.consensusBranchID) {
-		return nil, errors.New("could not read nVersionGroupId")
+		return nil, errors.New("could not read nConsensusBranchId")
 	}
-	if tx.nVersionGroupID != ZIP230_VERSION_GROUP_ID {
+	if tx.nVersionGroupID != VALAR_NU7_VERSION_GROUP_ID {
 		// This shouldn't be possible
 		return nil, fmt.Errorf("version group ID %d must be 0xFFFFFFFF", tx.nVersionGroupID)
+	}
+	if tx.consensusBranchID != VALAR_NU7_CONSENSUS_BRANCH_ID {
+		return nil, fmt.Errorf("consensus branch ID %d must be 0xFFFFFFFF", tx.consensusBranchID)
 	}
 	if !s.Skip(4) {
 		return nil, errors.New("could not skip nLockTime")
@@ -690,12 +698,13 @@ func parseOrchardActionsBundle(data []byte, pool string) ([]byte, []action, erro
 const OVERWINTER_TX_VERSION uint32 = 3
 const SAPLING_TX_VERSION uint32 = 4
 const ZIP225_TX_VERSION uint32 = 5
-const ZIP230_TX_VERSION uint32 = 6
+const VALAR_NU7_TX_VERSION uint32 = 6
 
 const OVERWINTER_VERSION_GROUP_ID uint32 = 0x03C48270
 const SAPLING_VERSION_GROUP_ID uint32 = 0x892F2085
 const ZIP225_VERSION_GROUP_ID uint32 = 0x26A7270A
-const ZIP230_VERSION_GROUP_ID uint32 = 0xFFFFFFFF
+const VALAR_NU7_VERSION_GROUP_ID uint32 = 0xFFFFFFFF
+const VALAR_NU7_CONSENSUS_BRANCH_ID uint32 = 0xFFFFFFFF
 
 func (tx *Transaction) isOverwinterV3() bool {
 	return tx.fOverwintered &&
@@ -715,10 +724,10 @@ func (tx *Transaction) isZip225V5() bool {
 		tx.version == ZIP225_TX_VERSION
 }
 
-func (tx *Transaction) isZip230V6() bool {
+func (tx *Transaction) isValarNU7V6() bool {
 	return tx.fOverwintered &&
-		tx.nVersionGroupID == ZIP230_VERSION_GROUP_ID &&
-		tx.version == ZIP230_TX_VERSION
+		tx.nVersionGroupID == VALAR_NU7_VERSION_GROUP_ID &&
+		tx.version == VALAR_NU7_TX_VERSION
 }
 
 func (tx *Transaction) isGroth16Proof() bool {
@@ -750,13 +759,13 @@ func (tx *Transaction) ParseFromSlice(data []byte) ([]byte, error) {
 	}
 
 	if tx.fOverwintered &&
-		!(tx.isOverwinterV3() || tx.isSaplingV4() || tx.isZip225V5() || tx.isZip230V6()) {
+		!(tx.isOverwinterV3() || tx.isSaplingV4() || tx.isZip225V5() || tx.isValarNU7V6()) {
 		return nil, errors.New("unknown transaction format")
 	}
 	// parse the main part of the transaction
 	if tx.isZip225V5() {
 		s, err = tx.parseV5([]byte(s))
-	} else if tx.isZip230V6() {
+	} else if tx.isValarNU7V6() {
 		s, err = tx.parseV6([]byte(s))
 	} else {
 		s, err = tx.parsePreV5([]byte(s))
