@@ -214,6 +214,134 @@ func TestGetLatestBlock(t *testing.T) {
 	step = 0
 }
 
+func TestCompletedSubtreeExists(t *testing.T) {
+	tests := []struct {
+		name       string
+		treeSize   uint32
+		startIndex uint32
+		want       bool
+	}{
+		{
+			name:       "empty tree has no first subtree",
+			treeSize:   0,
+			startIndex: 0,
+			want:       false,
+		},
+		{
+			name:       "one short of first subtree",
+			treeSize:   65535,
+			startIndex: 0,
+			want:       false,
+		},
+		{
+			name:       "exact first subtree",
+			treeSize:   65536,
+			startIndex: 0,
+			want:       true,
+		},
+		{
+			name:       "second subtree not complete",
+			treeSize:   65536,
+			startIndex: 1,
+			want:       false,
+		},
+		{
+			name:       "exact second subtree",
+			treeSize:   131072,
+			startIndex: 1,
+			want:       true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := completedSubtreeExists(test.treeSize, test.startIndex); got != test.want {
+				t.Fatalf("completedSubtreeExists(%d, %d) = %t, want %t",
+					test.treeSize, test.startIndex, got, test.want)
+			}
+		})
+	}
+}
+
+func TestCurrentIronwoodTreeSizeFromRPC(t *testing.T) {
+	originalRawRequest := common.RawRequest
+	defer func() { common.RawRequest = originalRawRequest }()
+
+	step := 0
+	common.RawRequest = func(method string, params []json.RawMessage) (json.RawMessage, error) {
+		step++
+		switch step {
+		case 1:
+			if method != "getblockchaininfo" {
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return []byte(`{"Blocks": 123}`), nil
+		case 2:
+			if method != "getblock" {
+				t.Fatalf("unexpected method: %s", method)
+			}
+			var height string
+			if err := json.Unmarshal(params[0], &height); err != nil {
+				t.Fatalf("could not unmarshal height: %v", err)
+			}
+			if height != "123" {
+				t.Fatalf("unexpected getblock height: %s", height)
+			}
+			if string(params[1]) != "1" {
+				t.Fatalf("unexpected getblock verbosity: %s", string(params[1]))
+			}
+			return []byte(`{"trees":{"ironwood":{"size":42}}}`), nil
+		default:
+			t.Fatalf("unexpected extra RPC call %d", step)
+			return nil, nil
+		}
+	}
+
+	size, known, err := currentIronwoodTreeSizeFromRPC()
+	if err != nil {
+		t.Fatalf("currentIronwoodTreeSizeFromRPC failed: %v", err)
+	}
+	if !known {
+		t.Fatal("expected known Ironwood tree size")
+	}
+	if size != 42 {
+		t.Fatalf("tree size = %d, want 42", size)
+	}
+}
+
+func TestCurrentIronwoodTreeSizeFromRPCMissingIronwoodFailsClosed(t *testing.T) {
+	originalRawRequest := common.RawRequest
+	defer func() { common.RawRequest = originalRawRequest }()
+
+	step := 0
+	common.RawRequest = func(method string, params []json.RawMessage) (json.RawMessage, error) {
+		step++
+		switch step {
+		case 1:
+			if method != "getblockchaininfo" {
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return []byte(`{"Blocks": 123}`), nil
+		case 2:
+			if method != "getblock" {
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return []byte(`{"trees":{"orchard":{"size":42}}}`), nil
+		default:
+			t.Fatalf("unexpected extra RPC call %d", step)
+			return nil, nil
+		}
+	}
+
+	size, known, err := currentIronwoodTreeSizeFromRPC()
+	if err != nil {
+		t.Fatalf("currentIronwoodTreeSizeFromRPC failed: %v", err)
+	}
+	if known {
+		t.Fatalf("tree size unexpectedly known: %d", size)
+	}
+}
+
 // A valid address starts with "t", followed by 34 alpha characters;
 // these should all be detected as invalid.
 var addressTests = []string{

@@ -36,6 +36,8 @@ type lwdStreamer struct {
 	walletrpc.UnimplementedCompactTxStreamerServer
 }
 
+const subtreeRootSpan = uint64(1 << 16)
+
 // NewLwdStreamer constructs a gRPC context.
 func NewLwdStreamer(cache *common.BlockCache, chainName string, enablePing bool) (walletrpc.CompactTxStreamerServer, error) {
 	return &lwdStreamer{cache: cache, chainName: chainName, pingEnable: enablePing}, nil
@@ -839,6 +841,80 @@ func (s *lwdStreamer) GetAddressUtxos(ctx context.Context, arg *walletrpc.GetAdd
 	return r, nil
 }
 
+func isUnsupportedIronwoodSubtreePoolError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "invalid pool name") &&
+		strings.Contains(message, "sapling") &&
+		strings.Contains(message, "orchard")
+}
+
+func completedSubtreeExists(treeSize uint32, startIndex uint32) bool {
+	nextRequestedSubtreeEnd := (uint64(startIndex) + 1) * subtreeRootSpan
+	return uint64(treeSize) >= nextRequestedSubtreeEnd
+}
+
+func currentIronwoodTreeSizeFromRPC() (uint32, bool, error) {
+	info, err := common.GetBlockChainInfo()
+	if err != nil {
+		return 0, false, err
+	}
+
+	heightJSON, err := json.Marshal(strconv.Itoa(info.Blocks))
+	if err != nil {
+		return 0, false, err
+	}
+	result, rpcErr := common.RawRequest("getblock", []json.RawMessage{heightJSON, json.RawMessage("1")})
+	if rpcErr != nil {
+		return 0, false, rpcErr
+	}
+
+	var block struct {
+		Trees struct {
+			Ironwood *struct {
+				Size *uint32
+			}
+		}
+	}
+	if err := json.Unmarshal(result, &block); err != nil {
+		return 0, false, err
+	}
+	if block.Trees.Ironwood == nil || block.Trees.Ironwood.Size == nil {
+		return 0, false, nil
+	}
+	return *block.Trees.Ironwood.Size, true, nil
+}
+
+func (s *lwdStreamer) canReturnEmptyIronwoodSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, rpcErr error) bool {
+	if arg.ShieldedProtocol != walletrpc.ShieldedProtocol_ironwood ||
+		!isUnsupportedIronwoodSubtreePoolError(rpcErr) {
+		return false
+	}
+
+	treeSize, known, err := currentIronwoodTreeSizeFromRPC()
+	if err != nil {
+		common.Log.Warnf("GetSubtreeRoots: cannot check Ironwood tree size: %s", err.Error())
+		return false
+	}
+	if !known {
+		common.Log.Warn("GetSubtreeRoots: backend did not expose Ironwood tree size")
+		return false
+	}
+
+	if completedSubtreeExists(treeSize, arg.StartIndex) {
+		return false
+	}
+
+	common.Log.Warnf(
+		"GetSubtreeRoots: backend does not expose Ironwood subtree roots; returning empty stream because ironwood tree size %d is below requested subtree index %d",
+		treeSize,
+		arg.StartIndex,
+	)
+	return true
+}
+
 func (s *lwdStreamer) GetSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, resp walletrpc.CompactTxStreamer_GetSubtreeRootsServer) error {
 	common.Log.Debugf("gRPC GetSubtreeRoots(%+v)\n", arg)
 	if common.DarksideEnabled {
@@ -876,6 +952,9 @@ func (s *lwdStreamer) GetSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, resp wa
 	}
 	result, rpcErr := common.RawRequest("z_getsubtreesbyindex", params)
 	if rpcErr != nil {
+		if s.canReturnEmptyIronwoodSubtreeRoots(arg, rpcErr) {
+			return nil
+		}
 		return status.Errorf(codes.InvalidArgument,
 			"GetSubtreeRoots: z_getsubtreesbyindex, error: %s", rpcErr.Error())
 	}
