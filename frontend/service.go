@@ -36,6 +36,7 @@ type lwdStreamer struct {
 	walletrpc.UnimplementedCompactTxStreamerServer
 }
 
+// subtreeRootSpan is 2^16, the note span covered by each subtree root.
 const subtreeRootSpan = uint64(1 << 16)
 
 // NewLwdStreamer constructs a gRPC context.
@@ -841,6 +842,8 @@ func (s *lwdStreamer) GetAddressUtxos(ctx context.Context, arg *walletrpc.GetAdd
 	return r, nil
 }
 
+// isUnsupportedIronwoodSubtreePoolError matches the legacy backend error
+// returned before z_getsubtreesbyindex accepts Ironwood as a pool name.
 func isUnsupportedIronwoodSubtreePoolError(err error) bool {
 	if err == nil {
 		return false
@@ -851,11 +854,15 @@ func isUnsupportedIronwoodSubtreePoolError(err error) bool {
 		strings.Contains(message, "orchard")
 }
 
+// completedSubtreeExists reports whether the requested subtree start index
+// points to a subtree that is complete for the current tree size.
 func completedSubtreeExists(treeSize uint32, startIndex uint32) bool {
 	nextRequestedSubtreeEnd := (uint64(startIndex) + 1) * subtreeRootSpan
 	return uint64(treeSize) >= nextRequestedSubtreeEnd
 }
 
+// currentIronwoodTreeSizeFromRPC probes the tip block's Ironwood tree size so
+// the fallback can decide whether any completed Ironwood subtree should exist.
 func currentIronwoodTreeSizeFromRPC() (uint32, bool, error) {
 	info, err := common.GetBlockChainInfo()
 	if err != nil {
@@ -887,6 +894,9 @@ func currentIronwoodTreeSizeFromRPC() (uint32, bool, error) {
 	return *block.Trees.Ironwood.Size, true, nil
 }
 
+// canReturnEmptyIronwoodSubtreeRoots permits an empty response only for an
+// Ironwood request rejected by a legacy backend when the current tree size is
+// known and below the requested completed subtree.
 func (s *lwdStreamer) canReturnEmptyIronwoodSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, rpcErr error) bool {
 	if arg.ShieldedProtocol != walletrpc.ShieldedProtocol_ironwood ||
 		!isUnsupportedIronwoodSubtreePoolError(rpcErr) {
@@ -903,6 +913,7 @@ func (s *lwdStreamer) canReturnEmptyIronwoodSubtreeRoots(arg *walletrpc.GetSubtr
 		return false
 	}
 
+	// Fail closed once the requested subtree should be complete.
 	if completedSubtreeExists(treeSize, arg.StartIndex) {
 		return false
 	}
