@@ -14,6 +14,10 @@ and this library adheres to Rust's notion of
 - `service.TreeState.ironwoodTree`
 - `service.ShieldedProtocol.ironwood`
 
+### Changed
+- Empty `service.BlockRange.poolTypes` and
+  `service.GetMempoolTxRequest.poolTypes` now include Ironwood shielded data.
+
 ## [v0.4.1] - 2026-02-20
 
 ### Added
