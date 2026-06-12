@@ -148,21 +148,22 @@ func DarksideInit(c *BlockCache, timeout int) {
 }
 
 // DarksideReset allows the wallet test code to specify values
-// that are returned by GetLightdInfo().
-func DarksideReset(sa int, bi, cn string, sst, sot, sit uint32) error {
-	Log.Info("DarksideReset(saplingActivation=", sa, ")")
+// that are returned by GetLightdInfo(). The tree sizes seed state as of
+// saplingActivation - 1.
+func DarksideReset(saplingActivation int, branchID, chainName string, startSaplingTreeSize, startOrchardTreeSize, startIronwoodTreeSize uint32) error {
+	Log.Info("DarksideReset(saplingActivation=", saplingActivation, ")")
 	mutex.Lock()
 	defer mutex.Unlock()
 	stopIngestor()
 	state = darksideState{
 		resetted:               true,
-		startHeight:            sa,
+		startHeight:            saplingActivation,
 		latestHeight:           -1,
-		branchID:               bi,
-		chainName:              cn,
-		startSaplingTreeSize:   sst,
-		startOrchardTreeSize:   sot,
-		startIronwoodTreeSize:  sit,
+		branchID:               branchID,
+		chainName:              chainName,
+		startSaplingTreeSize:   startSaplingTreeSize,
+		startOrchardTreeSize:   startOrchardTreeSize,
+		startIronwoodTreeSize:  startIronwoodTreeSize,
 		cache:                  state.cache,
 		activeBlocks:           make([]*activeBlock, 0),
 		stagedBlocks:           make([][]byte, 0),
@@ -172,7 +173,7 @@ func DarksideReset(sa int, bi, cn string, sst, sot, sit uint32) error {
 		stagedTreeStatesByHash: make(map[string]*DarksideTreeState),
 		subtrees:               make(map[walletrpc.ShieldedProtocol]darksideProtocolSubtreeRoots),
 	}
-	state.cache.Reset(sa)
+	state.cache.Reset(saplingActivation)
 	return nil
 }
 
