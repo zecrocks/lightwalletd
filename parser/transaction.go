@@ -544,7 +544,7 @@ func (tx *Transaction) parseV5(data []byte) ([]byte, error) {
 	}
 
 	var orchardActions []action
-	s, orchardActions, err = parseOrchardActionsBundle([]byte(s), "Orchard")
+	s, orchardActions, err = parseOrchardActionShapeBundle([]byte(s), "Orchard")
 	if err != nil {
 		return nil, err
 	}
@@ -589,14 +589,14 @@ func (tx *Transaction) parseV6(data []byte) ([]byte, error) {
 	}
 
 	var orchardActions []action
-	s, orchardActions, err = parseOrchardActionsBundle([]byte(s), "Orchard")
+	s, orchardActions, err = parseOrchardActionShapeBundle([]byte(s), "Orchard")
 	if err != nil {
 		return nil, err
 	}
 	tx.orchardActions = orchardActions
 
 	var ironwoodActions []action
-	s, ironwoodActions, err = parseOrchardActionsBundle([]byte(s), "Ironwood")
+	s, ironwoodActions, err = parseOrchardActionShapeBundle([]byte(s), "Ironwood")
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +659,9 @@ func (tx *Transaction) parseSaplingBundle(data []byte) ([]byte, error) {
 	return s, nil
 }
 
-func parseOrchardActionsBundle(data []byte, pool string) ([]byte, []action, error) {
+// parseOrchardActionShapeBundle parses the action-field layout shared by
+// Orchard and Ironwood, with pool used for error messages.
+func parseOrchardActionShapeBundle(data []byte, pool string) ([]byte, []action, error) {
 	s := bytestring.String(data)
 	var err error
 	var actionsCount int
