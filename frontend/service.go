@@ -191,6 +191,24 @@ func (s *lwdStreamer) GetBlock(ctx context.Context, id *walletrpc.BlockID) (*wal
 	return cBlock, err
 }
 
+// pruneCompactBlockToNullifiers removes shielded data not used by the
+// nullifier RPCs and clears tree size metadata.
+func pruneCompactBlockToNullifiers(cBlock *walletrpc.CompactBlock) {
+	for _, tx := range cBlock.Vtx {
+		for i, action := range tx.Actions {
+			tx.Actions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
+		}
+		for i, action := range tx.IronwoodActions {
+			tx.IronwoodActions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
+		}
+		tx.Outputs = nil
+	}
+	// these are not needed (we prefer to save bandwidth)
+	cBlock.ChainMetadata.SaplingCommitmentTreeSize = 0
+	cBlock.ChainMetadata.OrchardCommitmentTreeSize = 0
+	cBlock.ChainMetadata.IronwoodCommitmentTreeSize = 0
+}
+
 // GetBlockNullifiers is the same as GetBlock except that it returns the compact block
 // with actions containing only the nullifiers (a subset of the full compact block).
 func (s *lwdStreamer) GetBlockNullifiers(ctx context.Context, id *walletrpc.BlockID) (*walletrpc.CompactBlock, error) {
@@ -212,21 +230,11 @@ func (s *lwdStreamer) GetBlockNullifiers(ctx context.Context, id *walletrpc.Bloc
 		// GetBlock() returns gRPC-compatible errors.
 		return nil, err
 	}
+	pruneCompactBlockToNullifiers(cBlock)
 	for _, tx := range cBlock.Vtx {
-		for i, action := range tx.Actions {
-			tx.Actions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
-		}
-		for i, action := range tx.IronwoodActions {
-			tx.IronwoodActions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
-		}
-		tx.Outputs = nil
 		tx.Vin = nil
 		tx.Vout = nil
 	}
-	// these are not needed (we prefer to save bandwidth)
-	cBlock.ChainMetadata.SaplingCommitmentTreeSize = 0
-	cBlock.ChainMetadata.OrchardCommitmentTreeSize = 0
-	cBlock.ChainMetadata.IronwoodCommitmentTreeSize = 0
 	common.Log.Tracef("  return: %+v\n", cBlock)
 	return cBlock, err
 }
@@ -295,19 +303,7 @@ func (s *lwdStreamer) GetBlockRangeNullifiers(span *walletrpc.BlockRange, resp w
 			// this will also catch context.DeadlineExceeded from the timeout
 			return err
 		case cBlock := <-blockChan:
-			for _, tx := range cBlock.Vtx {
-				for i, action := range tx.Actions {
-					tx.Actions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
-				}
-				for i, action := range tx.IronwoodActions {
-					tx.IronwoodActions[i] = &walletrpc.CompactOrchardAction{Nullifier: action.Nullifier}
-				}
-				tx.Outputs = nil
-			}
-			// these are not needed (we prefer to save bandwidth)
-			cBlock.ChainMetadata.SaplingCommitmentTreeSize = 0
-			cBlock.ChainMetadata.OrchardCommitmentTreeSize = 0
-			cBlock.ChainMetadata.IronwoodCommitmentTreeSize = 0
+			pruneCompactBlockToNullifiers(cBlock)
 			if err := resp.Send(cBlock); err != nil {
 				return err
 			}
