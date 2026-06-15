@@ -29,7 +29,7 @@ The most recent changes are listed first.
   shielded, or a combination) of blocks (`GetBlockRange`) and transactions
   (`GetMempoolTx`).
 
-- Add Ironwood compact block, tree state, subtree root, and Valar NU7 V6
+- Add Ironwood compact block, tree state, subtree root, and Ironwood / NU6.3 V6
   transaction parsing support. Empty `poolTypes` requests now include Ironwood
   shielded data.
 
