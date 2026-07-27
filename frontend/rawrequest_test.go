@@ -135,7 +135,7 @@ func TestContextRawRequestUnauthorizedIsTyped(t *testing.T) {
 		HTTPPostMode: true,
 		DisableTLS:   true,
 	}
-	rawRequest, err := NewContextRawRequest(cfg)
+	rawRequest, err := NewContextRawRequest(cfg, 4)
 	if err != nil {
 		t.Fatalf("NewContextRawRequest failed: %v", err)
 	}
