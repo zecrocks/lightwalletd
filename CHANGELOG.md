@@ -37,6 +37,11 @@ The most recent changes are listed first.
   starting up — zcashd replies to RPCs with error `-28` while it loads the
   block index — is treated as unreachable, and waited for.
 
+- On `SIGINT`/`SIGTERM`, stop the gRPC server gracefully so in-flight RPCs can
+  complete, falling back to a forced stop after 30 seconds, instead of exiting
+  immediately. The block cache is now flushed after the server has stopped, so
+  blocks ingested by in-flight requests are included.
+
 ## [0.5.1] - 2026-07-27
 
 ### Added
