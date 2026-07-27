@@ -24,6 +24,7 @@ import (
 	"github.com/zcash/lightwalletd/walletrpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // 'make build' will overwrite this string with the output of git-describe (tag)
@@ -81,6 +82,14 @@ var Time struct {
 
 // Log as a global variable simplifies logging
 var Log *logrus.Entry
+
+// LightdInfo cache - avoid repeated RPC calls for server info
+var (
+	lightdInfoCache      *walletrpc.LightdInfo
+	lightdInfoCacheTime  time.Time
+	lightdInfoCacheTTL   = 5 * time.Second // server status doesn't need real-time updates
+	lightdInfoCacheMutex sync.RWMutex
+)
 
 // The following are JSON zcashd rpc requests and replies.
 type (
@@ -317,6 +326,17 @@ func GetBlockChainInfo() (*ZcashdRpcReplyGetblockchaininfo, error) {
 }
 
 func GetLightdInfo() (*walletrpc.LightdInfo, error) {
+	// Serve from cache when the entry is still fresh.
+	lightdInfoCacheMutex.RLock()
+	if lightdInfoCache != nil && Time.Now().Sub(lightdInfoCacheTime) < lightdInfoCacheTTL {
+		// Return a clone so callers can't mutate the cached value. proto.Clone
+		// rather than a struct copy, because LightdInfo embeds a mutex.
+		info := proto.Clone(lightdInfoCache).(*walletrpc.LightdInfo)
+		lightdInfoCacheMutex.RUnlock()
+		return info, nil
+	}
+	lightdInfoCacheMutex.RUnlock()
+
 	result, rpcErr := RawRequest(context.Background(), "getinfo", []json.RawMessage{})
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -355,7 +375,7 @@ func GetLightdInfo() (*walletrpc.LightdInfo, error) {
 	if DarksideEnabled {
 		vendor = "ECC DarksideWalletD"
 	}
-	return &walletrpc.LightdInfo{
+	info := &walletrpc.LightdInfo{
 		Version:                 Version,
 		Vendor:                  vendor,
 		TaddrSupport:            true,
@@ -373,7 +393,16 @@ func GetLightdInfo() (*walletrpc.LightdInfo, error) {
 		DonationAddress:         DonationAddress,
 		UpgradeName:             upgrade.Name,
 		UpgradeHeight:           uint64(upgrade.ActivationHeight),
-	}, nil
+	}
+
+	// Update cache
+	lightdInfoCacheMutex.Lock()
+	lightdInfoCache = info
+	lightdInfoCacheTime = Time.Now()
+	lightdInfoCacheMutex.Unlock()
+
+	// Return a clone so callers can't mutate the cached value.
+	return proto.Clone(info).(*walletrpc.LightdInfo), nil
 }
 
 func getBlockFromRPC(ctx context.Context, height int) (*walletrpc.CompactBlock, error) {

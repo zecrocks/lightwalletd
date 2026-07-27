@@ -42,6 +42,13 @@ The most recent changes are listed first.
   immediately. The block cache is now flushed after the server has stopped, so
   blocks ingested by in-flight requests are included.
 
+- Reduce backend RPC load from polling wallets. `GetLatestBlock` and
+  `GetLatestTreeState` now read the chain tip from the block cache that the
+  ingestor already maintains, instead of issuing a `getblockchaininfo` per
+  call, and `GetLightdInfo` caches its reply for 5 seconds. All three fall
+  back to the RPC when the cache is disabled (`--nocache`) or still empty
+  during initial sync.
+
 ## [0.5.1] - 2026-07-27
 
 ### Added
