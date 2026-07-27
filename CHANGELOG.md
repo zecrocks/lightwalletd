@@ -6,6 +6,32 @@ and this library adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The most recent changes are listed first.
 
+## [Unreleased]
+
+### Removed
+
+- Remove zcashd-specific backend support, as zcashd is fully deprecated and
+  no longer runs on mainnet or testnet. The startup backend-detection logic
+  and the zcashd-only `getexperimentalfeatures` check are gone; lightwalletd
+  now works with any Zcash full node (such as zebrad) that provides the
+  expected JSON-RPC interface.
+
+- Remove the stale zcashd-specific Makefile docker targets, and rewrite
+  `utils/pullblocks.sh` to use JSON-RPC directly instead of `zcash-cli`.
+
+### Changed
+
+- Documentation, comments, and internal type names now refer to the backend
+  generically as the "Zcash node" rather than zcashd.
+
+No operator-facing interfaces changed: the `--zcash-conf-path` option, the
+supported config file formats (`zcash.conf`-style INI and TOML),
+environment variables, and the docker-compose files are all unchanged
+(updating the docker-compose stack is planned as a follow-up). The
+`zcashdBuild` and `zcashdSubversion` fields of the `LightdInfo` gRPC message
+keep their names for wire compatibility and report the connected node's build
+and subversion strings.
+
 ## [0.5.0] - 2026-07-26
 
 ### Added
