@@ -39,28 +39,29 @@ var (
 )
 
 type Options struct {
-	GRPCBindAddr        string `json:"grpc_bind_address,omitempty"`
-	GRPCLogging         bool   `json:"grpc_logging_insecure,omitempty"`
-	HTTPBindAddr        string `json:"http_bind_address,omitempty"`
-	TLSCertPath         string `json:"tls_cert_path,omitempty"`
-	TLSKeyPath          string `json:"tls_cert_key,omitempty"`
-	LogLevel            uint64 `json:"log_level,omitempty"`
-	LogFile             string `json:"log_file,omitempty"`
-	ZcashConfPath       string `json:"zcash_conf,omitempty"`
-	RPCUser             string `json:"rpcuser"`
-	RPCPassword         string `json:"rpcpassword"`
-	RPCHost             string `json:"rpchost"`
-	RPCPort             string `json:"rpcport"`
-	NoBackendCheck      bool   `json:"no_backend_check,omitempty"`
-	NoTLSVeryInsecure   bool   `json:"no_tls_very_insecure,omitempty"`
-	GenCertVeryInsecure bool   `json:"gen_cert_very_insecure,omitempty"`
-	Redownload          bool   `json:"redownload"`
-	NoCache             bool   `json:"nocache"`
-	SyncFromHeight      int    `json:"sync_from_height"`
-	DataDir             string `json:"data_dir"`
-	PingEnable          bool   `json:"ping_enable"`
-	Darkside            bool   `json:"darkside"`
-	DarksideTimeout     uint64 `json:"darkside_timeout"`
+	GRPCBindAddr         string `json:"grpc_bind_address,omitempty"`
+	GRPCLogging          bool   `json:"grpc_logging_insecure,omitempty"`
+	HTTPBindAddr         string `json:"http_bind_address,omitempty"`
+	TLSCertPath          string `json:"tls_cert_path,omitempty"`
+	TLSKeyPath           string `json:"tls_cert_key,omitempty"`
+	LogLevel             uint64 `json:"log_level,omitempty"`
+	LogFile              string `json:"log_file,omitempty"`
+	ZcashConfPath        string `json:"zcash_conf,omitempty"`
+	RPCUser              string `json:"rpcuser"`
+	RPCPassword          string `json:"rpcpassword"`
+	RPCHost              string `json:"rpchost"`
+	RPCPort              string `json:"rpcport"`
+	NoBackendCheck       bool   `json:"no_backend_check,omitempty"`
+	NoTLSVeryInsecure    bool   `json:"no_tls_very_insecure,omitempty"`
+	GenCertVeryInsecure  bool   `json:"gen_cert_very_insecure,omitempty"`
+	Redownload           bool   `json:"redownload"`
+	NoCache              bool   `json:"nocache"`
+	SyncFromHeight       int    `json:"sync_from_height"`
+	DataDir              string `json:"data_dir"`
+	PingEnable           bool   `json:"ping_enable"`
+	Darkside             bool   `json:"darkside"`
+	DarksideTimeout      uint64 `json:"darkside_timeout"`
+	TreeStateCacheWindow int    `json:"treestate_cache_window"` // blocks to cache tree states (0 = disabled, default ~1 year)
 }
 
 // RawRequest points to the function to send an RPC request to zcashd;
@@ -493,9 +494,15 @@ func getBlockFromRPC(ctx context.Context, height int) (*walletrpc.CompactBlock, 
 }
 
 var (
-	ingestorRunning  bool
-	stopIngestorChan = make(chan struct{})
+	ingestorRunning   bool
+	stopIngestorChan  = make(chan struct{})
+	ingestorTreeCache *TreeStateCache // for reorg notifications
 )
+
+// SetIngestorTreeStateCache sets the TreeStateCache that will be notified on reorgs.
+func SetIngestorTreeStateCache(tsc *TreeStateCache) {
+	ingestorTreeCache = tsc
+}
 
 func startIngestor(c *BlockCache) {
 	if !ingestorRunning {
@@ -737,6 +744,9 @@ func blockIngestorSerial(c *BlockCache, rep int) {
 		}
 		Log.Info("REORG: dropping block ", height-1, " ", displayHash(c.GetLatestHash()))
 		c.Reorg(height - 1)
+		if ingestorTreeCache != nil {
+			ingestorTreeCache.Reorg(height - 1)
+		}
 	}
 }
 
