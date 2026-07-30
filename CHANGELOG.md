@@ -88,6 +88,31 @@ The most recent changes are listed first.
   defaults to 525600 blocks (roughly a year); pass 0 to disable it. The cache
   is not used when the block cache is disabled with `--nocache`.
 
+## [0.5.2] - 2026-07-30
+
+### Fixed
+
+- Narrow the `GetMempoolTx` mutex to the cache snapshot it protects, instead
+  of holding it across the whole handler (GHSA-f9pw-q493-7qvh,
+  GHSA-9p9r-mggr-8q9g). The mempool refresh issues one `getrawmempool` plus a
+  `getrawtransaction` per new txid, and the response loop streams to the
+  client; both ran inside the critical section, so a single caller's backend
+  round-trips — or one client that simply stopped reading its stream — stalled
+  every other `GetMempoolTx` caller. The backend calls and the streaming sends
+  now run outside the lock, which is taken only to claim a refresh, snapshot
+  the cache, and publish the new one.
+
+- A `GetMempoolTx` refresh now stops when the client that triggered it
+  disconnects, instead of running to completion. Since the backend calls
+  observe the request context, every remaining fetch would otherwise fail and
+  be treated as a transaction that had left the mempool, publishing a cache
+  missing nearly all of its entries and degrading it for other callers until
+  the next refresh.
+
+- A `GetMempoolTx` refresh that fails part-way no longer leaves the cached
+  txid list updated while the transaction map still holds the previous
+  contents; the two are now published together.
+
 ## [0.5.1] - 2026-07-27
 
 ### Added
@@ -159,7 +184,9 @@ The most recent changes are listed first.
   spends and outputs, Orchard actions, JoinSplits, and the block's
   transaction count) than the input could possibly contain; sizing a slice
   from such a count previously allocated gigabytes before the first element
-  failed to parse, exhausting memory (GHSA-ph5v-77v6-j498).
+  failed to parse. The parser only consumes data supplied by the configured
+  backend node (or by the opt-in darkside testing facility), so this is
+  defensive hardening rather than a remotely reachable defect (#562).
 
 - Make `common.RawRequest` context-aware so cancelled `GetBlockRange` /
   `GetBlockRangeNullifiers` streams abort in-flight zcashd JSON-RPC calls
