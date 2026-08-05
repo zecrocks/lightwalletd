@@ -88,6 +88,24 @@ The most recent changes are listed first.
   defaults to 525600 blocks (roughly a year); pass 0 to disable it. The cache
   is not used when the block cache is disabled with `--nocache`.
 
+## [0.5.3] - 2026-08-04
+
+### Fixed
+
+- `GetBlockRange` and `GetBlockRangeNullifiers` now check that each block they
+  return connects to the one before it, and fail the stream with `Aborted`
+  rather than send a block that doesn't (GHSA-m7j5-wvx3-qj6j). Every height in
+  the range is resolved independently, from the block cache when it's present
+  there and from the backend node otherwise, so while the background ingestor
+  was still repairing a reorg, a single request spanning the cache tip could
+  return a block from the abandoned fork followed by one from the current
+  fork. That pair violates `block[n+1].prevHash == block[n].hash` and
+  describes a chain that cannot exist, which a strict wallet will reject and a
+  lenient one may briefly index against. Note that this makes each response
+  internally consistent; a range served entirely from the not-yet-repaired
+  part of the cache still returns blocks from the abandoned fork, until the
+  ingestor rewinds past them.
+
 ## [0.5.2] - 2026-07-30
 
 ### Fixed
