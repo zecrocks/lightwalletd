@@ -1437,3 +1437,71 @@ func TestGetMempoolTxAbortsRefreshOnClientCancel(t *testing.T) {
 		t.Fatalf("a partial cache was published: %d entries", len(*mempoolMap))
 	}
 }
+
+type testgetsubtreeroots struct {
+	walletrpc.CompactTxStreamer_GetSubtreeRootsServer
+}
+
+func (tg *testgetsubtreeroots) Context() context.Context {
+	return context.Background()
+}
+
+func (tg *testgetsubtreeroots) Send(sr *walletrpc.SubtreeRoot) error {
+	return nil
+}
+
+// An unrecognized ShieldedProtocol is the caller's mistake, so it must arrive as
+// InvalidArgument. Returning a bare error made it codes.Unknown -- "something went
+// wrong on the server" -- which is the code wallets back off and retry on, for a
+// request that can never succeed.
+func TestGetSubtreeRootsUnknownProtocolIsInvalidArgument(t *testing.T) {
+	testT = t
+	defer resetGlobals()
+	lwd, _ := testsetup()
+
+	common.RawRequest = func(ctx context.Context, method string, params []json.RawMessage) (json.RawMessage, error) {
+		testT.Fatal("the backend must not be called for an unrecognized shielded protocol")
+		return nil, nil
+	}
+	err := lwd.GetSubtreeRoots(&walletrpc.GetSubtreeRootsArg{
+		ShieldedProtocol: walletrpc.ShieldedProtocol(9999),
+	}, &testgetsubtreeroots{})
+	if err == nil {
+		t.Fatal("GetSubtreeRoots should have failed on an unrecognized shielded protocol")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatal("expected InvalidArgument for an unrecognized shielded protocol, got:",
+			status.Code(err), err)
+	}
+
+	// The recognized protocols still reach the backend, named as the RPC expects.
+	for _, protocol := range []walletrpc.ShieldedProtocol{
+		walletrpc.ShieldedProtocol_sapling,
+		walletrpc.ShieldedProtocol_orchard,
+		walletrpc.ShieldedProtocol_ironwood,
+	} {
+		called := false
+		common.RawRequest = func(ctx context.Context, method string, params []json.RawMessage) (json.RawMessage, error) {
+			called = true
+			if method != "z_getsubtreesbyindex" {
+				testT.Fatal("unexpected method", method)
+			}
+			var name string
+			if err := json.Unmarshal(params[0], &name); err != nil {
+				testT.Fatal("could not unmarshal the protocol parameter")
+			}
+			if name != protocol.String() {
+				testT.Fatal("expected protocol", protocol.String(), "got", name)
+			}
+			return json.Marshal(common.ZcashdRpcReplyGetsubtreebyindex{})
+		}
+		if err := lwd.GetSubtreeRoots(&walletrpc.GetSubtreeRootsArg{
+			ShieldedProtocol: protocol,
+		}, &testgetsubtreeroots{}); err != nil {
+			t.Fatal("GetSubtreeRoots failed for", protocol.String(), err)
+		}
+		if !called {
+			t.Fatal("the backend was not called for", protocol.String())
+		}
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"regexp"
@@ -1009,7 +1008,12 @@ func (s *lwdStreamer) GetSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, resp wa
 	case walletrpc.ShieldedProtocol_ironwood:
 		break
 	default:
-		return errors.New("unrecognized shielded protocol")
+		// A status error, like every other rejection of client input here: a bare
+		// error reaches the client as codes.Unknown, which is the code for "something
+		// went wrong on the server". Wallets retry that. An unrecognized protocol is
+		// the caller's to fix, and InvalidArgument is what says so.
+		return status.Errorf(codes.InvalidArgument,
+			"GetSubtreeRoots: unrecognized shielded protocol: %s", arg.ShieldedProtocol)
 	}
 	protocol, err := json.Marshal(arg.ShieldedProtocol.String())
 	if err != nil {
@@ -1111,7 +1115,8 @@ func (s *DarksideStreamer) Reset(ctx context.Context, ms *walletrpc.DarksideMeta
 
 	match, err = regexp.Match("\\A[a-zA-Z0-9]+\\z", []byte(ms.ChainName))
 	if err != nil || !match {
-		return nil, errors.New("invalid chain name")
+		return nil, status.Errorf(codes.InvalidArgument,
+			"Reset: invalid ChainName (must be alphanumeric): %s", ms.ChainName)
 	}
 	err = common.DarksideReset(
 		int(ms.SaplingActivation),

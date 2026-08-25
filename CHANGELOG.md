@@ -24,6 +24,14 @@ The most recent changes are listed first.
 
 ### Fixed
 
+- `GetSubtreeRoots` now rejects an unrecognized `ShieldedProtocol` with
+  `InvalidArgument` instead of `Unknown`. It was the one production handler
+  returning a bare Go error, which gRPC surfaces as `codes.Unknown` -- the code
+  a client reads as "the server had a problem" and backs off and retries on,
+  for a request that cannot succeed until the caller changes it. The darkside
+  `Reset` handler's `ChainName` check returned a bare error the same way, four
+  lines below its `BranchID` check, which already used `InvalidArgument`.
+
 - `GetTaddressBalance` now rejects an address list longer than the same 10,000
   limit that `GetTaddressBalanceStream`, `GetAddressUtxos` and
   `GetAddressUtxosStream` already enforce. The unary method takes its whole
