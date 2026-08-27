@@ -1450,10 +1450,7 @@ func (tg *testgetsubtreeroots) Send(sr *walletrpc.SubtreeRoot) error {
 	return nil
 }
 
-// An unrecognized ShieldedProtocol is the caller's mistake, so it must arrive as
-// InvalidArgument. Returning a bare error made it codes.Unknown -- "something went
-// wrong on the server" -- which is the code wallets back off and retry on, for a
-// request that can never succeed.
+// An unrecognized ShieldedProtocol must arrive as InvalidArgument, not Unknown.
 func TestGetSubtreeRootsUnknownProtocolIsInvalidArgument(t *testing.T) {
 	testT = t
 	defer resetGlobals()

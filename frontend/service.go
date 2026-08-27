@@ -1008,10 +1008,7 @@ func (s *lwdStreamer) GetSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, resp wa
 	case walletrpc.ShieldedProtocol_ironwood:
 		break
 	default:
-		// A status error, like every other rejection of client input here: a bare
-		// error reaches the client as codes.Unknown, which is the code for "something
-		// went wrong on the server". Wallets retry that. An unrecognized protocol is
-		// the caller's to fix, and InvalidArgument is what says so.
+		// A bare error would reach the client as codes.Unknown, which wallets retry.
 		return status.Errorf(codes.InvalidArgument,
 			"GetSubtreeRoots: unrecognized shielded protocol: %s", arg.ShieldedProtocol)
 	}
