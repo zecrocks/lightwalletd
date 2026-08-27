@@ -97,9 +97,8 @@ func (s *lwdStreamer) GetLatestBlock(ctx context.Context, placeholder *walletrpc
 // address-index scan (GHSA-x4m7-3gpp-xc36, finding 2).
 const maxTaddrTxBlockSpan = 10_000_000
 
-// GetTaddressTxids is a streaming RPC that returns transactions that have
-// the given transparent address (taddr) as either an input or output.
-// NB, this method is misnamed, it does not return txids.
+// GetTaddressTransactions is a streaming RPC that returns transactions that
+// have the given transparent address (taddr) as either an input or output.
 func (s *lwdStreamer) GetTaddressTransactions(addressBlockFilter *walletrpc.TransparentAddressBlockFilter, resp walletrpc.CompactTxStreamer_GetTaddressTransactionsServer) error {
 	common.Log.Debugf("gRPC GetTaddressTransactions(%+v)\n", addressBlockFilter)
 	if err := checkTaddress(addressBlockFilter.Address); err != nil {
