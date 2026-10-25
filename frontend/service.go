@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/btcjson"
 	"github.com/zcash/lightwalletd/common"
 	"github.com/zcash/lightwalletd/hash32"
 	"github.com/zcash/lightwalletd/parser"
@@ -114,9 +115,8 @@ func (s *lwdStreamer) GetLatestBlock(ctx context.Context, placeholder *walletrpc
 // address-index scan (GHSA-x4m7-3gpp-xc36, finding 2).
 const maxTaddrTxBlockSpan = 10_000_000
 
-// GetTaddressTxids is a streaming RPC that returns transactions that have
-// the given transparent address (taddr) as either an input or output.
-// NB, this method is misnamed, it does not return txids.
+// GetTaddressTransactions is a streaming RPC that returns transactions that
+// have the given transparent address (taddr) as either an input or output.
 func (s *lwdStreamer) GetTaddressTransactions(addressBlockFilter *walletrpc.TransparentAddressBlockFilter, resp walletrpc.CompactTxStreamer_GetTaddressTransactionsServer) error {
 	common.Log.Debugf("gRPC GetTaddressTransactions(%+v)\n", addressBlockFilter)
 	if err := checkTaddress(addressBlockFilter.Address); err != nil {
@@ -559,6 +559,44 @@ func (s *lwdStreamer) GetLightdInfo(ctx context.Context, in *walletrpc.Empty) (*
 	return lightdinfo, err
 }
 
+// GetStandardFee returns the ZIP 317 marginal fee, in zatoshis per
+// logical action, via the backend's `getstandardfee` JSON-RPC method.
+func (s *lwdStreamer) GetStandardFee(ctx context.Context, in *walletrpc.Empty) (*walletrpc.StandardFee, error) {
+	common.Log.Debugf("gRPC GetStandardFee(%+v)\n", in)
+	result, err := common.RawRequest(ctx, "getstandardfee", []json.RawMessage{})
+	if err != nil {
+		// A backend without this RPC fails with JSON-RPC method-not-found.
+		// Return Unimplemented (non-retryable), not Unavailable.
+		var rpcErr *btcjson.RPCError
+		if errors.As(err, &rpcErr) && rpcErr.Code == btcjson.ErrRPCMethodNotFound.Code {
+			return nil, status.Errorf(codes.Unimplemented,
+				"GetStandardFee: the backend does not support the getstandardfee RPC: %s", err.Error())
+		}
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, status.Errorf(codes.Unavailable,
+			"GetStandardFee: getstandardfee failed: %s", err.Error())
+	}
+	var reply struct {
+		StandardFee uint64 `json:"standard_fee"`
+		Version     uint32 `json:"version"`
+	}
+	if err := json.Unmarshal(result, &reply); err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"GetStandardFee: failed to parse getstandardfee reply: %s", err.Error())
+	}
+	if reply.StandardFee == 0 {
+		// A sane backend never reports a zero fee.
+		return nil, status.Error(codes.Internal,
+			"GetStandardFee: the backend reported a zero standard fee")
+	}
+	return &walletrpc.StandardFee{
+		FeeZat:           reply.StandardFee,
+		EstimatorVersion: reply.Version,
+	}, nil
+}
+
 // maxRawTxSize bounds the raw transaction bytes lightwalletd will forward to
 // zcashd. A Zcash transaction cannot exceed the 2,000,000-byte block size
 // limit, so anything larger is unminable by definition and there is no reason
@@ -633,14 +671,28 @@ func (s *lwdStreamer) SendTransaction(ctx context.Context, rawtx *walletrpc.RawT
 }
 
 func getTaddressBalanceZcashdRpc(ctx context.Context, addressList []string) (*walletrpc.Balance, error) {
+	// GHSA-x4m7-3gpp-xc36
+	if len(addressList) > maxTaddrsPerRequest {
+		return nil, status.Errorf(codes.ResourceExhausted,
+			"getTaddressBalanceZcashdRpc: too many addresses (limit %d)", maxTaddrsPerRequest)
+	}
+	// Eliminate duplicate addresses; zcashd sums per list entry, so a repeated
+	// address would otherwise inflate the balance it reports.
+	addresses := make([]string, 0)
+	seen := make(map[string]struct{})
 	for _, addr := range addressList {
+		if _, dup := seen[addr]; dup {
+			continue
+		}
 		if err := checkTaddress(addr); err != nil {
 			return nil, err
 		}
+		seen[addr] = struct{}{}
+		addresses = append(addresses, addr)
 	}
 	params := make([]json.RawMessage, 1)
 	addrList := &common.ZcashdRpcRequestGetaddressbalance{
-		Addresses: addressList,
+		Addresses: addresses,
 	}
 	param, err := json.Marshal(addrList)
 	if err != nil {
@@ -685,9 +737,8 @@ func (s *lwdStreamer) GetTaddressBalance(ctx context.Context, addresses *walletr
 // memory growth and backend work: GetTaddressBalanceStream accumulates
 // streamed addresses until the process is OOM-killed, and GetAddressUtxos
 // forwards the whole list to zcashd and materializes the full result before
-// applying client-side limits. The unary GetTaddressBalance is already
-// implicitly bounded by gRPC's MaxRecvMsgSize; this gives the other methods an
-// equivalent bound, generous for any legitimate wallet (GHSA-x4m7-3gpp-xc36).
+// applying client-side limits. Generous for any legitimate wallet
+// (GHSA-x4m7-3gpp-xc36).
 const maxTaddrsPerRequest = 10000
 
 // GetTaddressBalanceStream returns the total balance for a list of taddrs
@@ -938,22 +989,28 @@ func MempoolFilter(items, exclude []string) []string {
 }
 
 func getAddressUtxos(ctx context.Context, arg *walletrpc.GetAddressUtxosArg, f func(*walletrpc.GetAddressUtxosReply) error) error {
-	// Bound the address count before contacting zcashd: getaddressutxos cannot
-	// push down StartHeight/MaxEntries, so lightwalletd fetches and
-	// materializes the entire backend result before applying those limits.
-	// Capping the input keeps one request from forcing unbounded backend work
-	// and result materialization (GHSA-x4m7-3gpp-xc36).
+	// GHSA-x4m7-3gpp-xc36
 	if len(arg.Addresses) > maxTaddrsPerRequest {
 		return status.Errorf(codes.ResourceExhausted,
 			"getAddressUtxos: too many addresses (limit %d)", maxTaddrsPerRequest)
 	}
+	// Eliminate duplicate addresses; returned UTXO set doesn't change.
+	addresses := make([]string, 0)
+	seen := make(map[string]struct{})
 	for _, a := range arg.Addresses {
+		if _, dup := seen[a]; dup {
+			continue
+		}
 		if err := checkTaddress(a); err != nil {
 			return err
 		}
+		seen[a] = struct{}{}
+		addresses = append(addresses, a)
 	}
 	addrList := &common.ZcashdRpcRequestGetaddressutxos{
-		Addresses: arg.Addresses,
+		Addresses:   addresses,
+		StartHeight: arg.StartHeight,
+		MaxEntries:  arg.MaxEntries,
 	}
 	param, err := json.Marshal(addrList)
 	if err != nil {
@@ -981,6 +1038,7 @@ func getAddressUtxos(ctx context.Context, arg *walletrpc.GetAddressUtxosArg, f f
 	}
 	n := 0
 	for _, utxo := range utxosReply {
+		// Re-apply the limits; a backend that ignored them sent everything.
 		if uint64(utxo.Height) < arg.StartHeight {
 			continue
 		}
@@ -988,6 +1046,7 @@ func getAddressUtxos(ctx context.Context, arg *walletrpc.GetAddressUtxosArg, f f
 		if arg.MaxEntries > 0 && uint32(n) > arg.MaxEntries {
 			break
 		}
+
 		txidBigEndian, err := hex.DecodeString(utxo.Txid)
 		if err != nil {
 			return status.Errorf(codes.Internal,
@@ -1040,7 +1099,9 @@ func (s *lwdStreamer) GetSubtreeRoots(arg *walletrpc.GetSubtreeRootsArg, resp wa
 	case walletrpc.ShieldedProtocol_ironwood:
 		break
 	default:
-		return errors.New("unrecognized shielded protocol")
+		// A bare error would reach the client as codes.Unknown, which wallets retry.
+		return status.Errorf(codes.InvalidArgument,
+			"GetSubtreeRoots: unrecognized shielded protocol: %s", arg.ShieldedProtocol)
 	}
 	protocol, err := json.Marshal(arg.ShieldedProtocol.String())
 	if err != nil {
@@ -1142,7 +1203,8 @@ func (s *DarksideStreamer) Reset(ctx context.Context, ms *walletrpc.DarksideMeta
 
 	match, err = regexp.Match("\\A[a-zA-Z0-9]+\\z", []byte(ms.ChainName))
 	if err != nil || !match {
-		return nil, errors.New("invalid chain name")
+		return nil, status.Errorf(codes.InvalidArgument,
+			"Reset: invalid ChainName (must be alphanumeric): %s", ms.ChainName)
 	}
 	err = common.DarksideReset(
 		int(ms.SaplingActivation),

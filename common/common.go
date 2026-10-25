@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
 	"github.com/zcash/lightwalletd/hash32"
 	"github.com/zcash/lightwalletd/parser"
@@ -50,7 +52,7 @@ var (
 // in lockstep with the lightwallet-protocol subtree under
 // lightwallet-protocol/ - and only once the server actually serves everything
 // the named version specifies.
-const LightwalletProtocolVersion = "v0.5.0"
+const LightwalletProtocolVersion = "v0.6.0"
 
 type Options struct {
 	GRPCBindAddr         string `json:"grpc_bind_address,omitempty"`
@@ -185,6 +187,9 @@ type (
 	// zcashd rpc "getaddressutxos"
 	ZcashdRpcRequestGetaddressutxos struct {
 		Addresses []string `json:"addresses"`
+		// Optional; a backend that doesn't implement these ignores them.
+		StartHeight uint64 `json:"startHeight,omitempty"`
+		MaxEntries  uint32 `json:"maxEntries,omitempty"`
 	}
 	ZcashdRpcReplyGetaddressutxos struct {
 		Address     string
@@ -533,6 +538,41 @@ func stopIngestor() {
 	}
 }
 
+// bestBlockHashRetryDelay returns the wait before retrying getbestblockhash
+// after the given number of consecutive failures: 1s, 2s, 4s, ... capped at 30s.
+func bestBlockHashRetryDelay(failures int) time.Duration {
+	const maxDelay = 30 * time.Second
+	if failures < 1 {
+		failures = 1
+	}
+	if failures > 6 {
+		return maxDelay
+	}
+	delay := time.Second << (failures - 1)
+	if delay > maxDelay {
+		return maxDelay
+	}
+	return delay
+}
+
+// bestBlockHashErrorAfter is how long getbestblockhash can keep failing
+// before the retry log line is raised from Warn to Error.
+const bestBlockHashErrorAfter = 5 * time.Minute
+
+// bestBlockHashLogLevel returns the level for a retry log line, given how
+// long getbestblockhash has been failing.
+func bestBlockHashLogLevel(failingFor time.Duration) logrus.Level {
+	if failingFor >= bestBlockHashErrorAfter {
+		return logrus.ErrorLevel
+	}
+	return logrus.WarnLevel
+}
+
+var bestBlockHashLastSuccess = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "lightwalletd_getbestblockhash_last_success_timestamp_seconds",
+	Help: "Unix time of the last successful getbestblockhash call to the backend.",
+})
+
 // BlockIngestor runs as a goroutine and polls zcashd for new blocks, adding them
 // to the cache. The repetition count, rep, is nonzero only for unit-testing.
 //
@@ -690,6 +730,8 @@ func blockIngestorParallel(c *BlockCache) {
 func blockIngestorSerial(c *BlockCache, rep int) {
 	lastLog := Time.Now()
 	lastHeightLogged := 0
+	bestBlockHashFailures := 0
+	var firstBestBlockHashFailure time.Time
 
 	// Start listening for new blocks
 	for i := 0; rep == 0 || i < rep; i++ {
@@ -702,14 +744,26 @@ func blockIngestorSerial(c *BlockCache, rep int) {
 
 		result, err := RawRequest(context.Background(), "getbestblockhash", []json.RawMessage{})
 		if err != nil {
-			// Retry instead of exiting, so the ingestor tolerates the backend
-			// being temporarily unreachable — it keeps serving cached blocks and
-			// resumes when the backend is back, instead of crash-looping.
+			// Retry transient backend errors (e.g. HTTP 429 "Too many connections").
+			if bestBlockHashFailures == 0 {
+				firstBestBlockHashFailure = Time.Now()
+			}
+			bestBlockHashFailures++
+			delay := bestBlockHashRetryDelay(bestBlockHashFailures)
+			failingFor := Time.Now().Sub(firstBestBlockHashFailure)
 			Log.WithFields(logrus.Fields{
-				"error": err,
-			}).Warn("error " + NodeName + " getbestblockhash rpc, will retry")
-			Time.Sleep(8 * time.Second)
+				"error":       err,
+				"failures":    bestBlockHashFailures,
+				"failing_for": failingFor.String(),
+				"retry_in":    delay.String(),
+			}).Log(bestBlockHashLogLevel(failingFor), "error "+NodeName+" getbestblockhash rpc, will retry")
+			Time.Sleep(delay)
 			continue
+		}
+		bestBlockHashLastSuccess.Set(float64(Time.Now().Unix()))
+		if bestBlockHashFailures > 0 {
+			Log.Info(NodeName+" getbestblockhash rpc recovered after ", bestBlockHashFailures, " failures")
+			bestBlockHashFailures = 0
 		}
 		var hashHex string
 		err = json.Unmarshal(result, &hashHex)

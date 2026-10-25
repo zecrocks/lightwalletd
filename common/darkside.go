@@ -182,7 +182,7 @@ func DarksideReset(sa int, bi, cn string, sst, sot, sit uint32) error {
 	return nil
 }
 
-// DarksideAddBlock adds a single block to the active blocks list.
+// addBlockActive adds a single block to the active blocks list.
 func addBlockActive(blockBytes []byte) error {
 	block := parser.NewBlock()
 	rest, err := block.ParseFromSlice(blockBytes)
@@ -768,6 +768,14 @@ func darksideRawRequest(method string, params []json.RawMessage) (json.RawMessag
 		}
 
 		return json.Marshal(zcashdTreeState)
+
+	case "getstandardfee":
+		// Nothing to stage. Return the post-ZIP-2009 marginal fee,
+		// estimator version 0 (static).
+		return json.Marshal(struct {
+			StandardFee uint64 `json:"standard_fee"`
+			Version     uint32 `json:"version"`
+		}{1000, 0})
 
 	case "z_getsubtreesbyindex":
 		// This is implemented by DarksideGetSubtreeRoots().
