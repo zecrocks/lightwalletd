@@ -1,4 +1,6 @@
-FROM golang:1.25-alpine AS builder
+# Go 1.27.3 blocks the compromised eMudhra intermediate CA keys
+# (CVE-2026-111943), and go.mod requires it. Do not relax this.
+FROM golang:1.27.3-alpine AS builder
 
 RUN apk add --no-cache make git
 
@@ -9,6 +11,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# CGO is not needed (no cgo imports), and disabling it yields a static
+# binary that depends on nothing in the runtime stage.
+ENV CGO_ENABLED=0
 
 RUN make build
 

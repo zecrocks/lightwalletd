@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/btcjson"
 	"github.com/zcash/lightwalletd/common"
 	"github.com/zcash/lightwalletd/hash32"
 	"github.com/zcash/lightwalletd/parser"
@@ -32,13 +34,49 @@ type lwdStreamer struct {
 	treeStateCache *common.TreeStateCache
 	chainName      string
 	pingEnable     bool
-	mutex          sync.Mutex
+	// permits bounds concurrent block-range work; nil means unlimited.
+	permits chan struct{}
+	mutex   sync.Mutex
 	walletrpc.UnimplementedCompactTxStreamerServer
 }
 
-// NewLwdStreamer constructs a gRPC context.
-func NewLwdStreamer(cache *common.BlockCache, treeStateCache *common.TreeStateCache, chainName string, enablePing bool) (walletrpc.CompactTxStreamerServer, error) {
-	return &lwdStreamer{cache: cache, treeStateCache: treeStateCache, chainName: chainName, pingEnable: enablePing}, nil
+// blockRangeWait caps how long a request queues for a permit. A variable so
+// tests need not wait it out.
+var blockRangeWait = 10 * time.Second
+
+// NewLwdStreamer constructs a gRPC context. maxBlockRange bounds how many
+// block-range requests may be served at once; zero means unlimited.
+func NewLwdStreamer(cache *common.BlockCache, treeStateCache *common.TreeStateCache, chainName string, enablePing bool, maxBlockRange uint64) (walletrpc.CompactTxStreamerServer, error) {
+	s := &lwdStreamer{cache: cache, treeStateCache: treeStateCache, chainName: chainName, pingEnable: enablePing}
+	if maxBlockRange > 0 {
+		s.permits = make(chan struct{}, maxBlockRange)
+	}
+	return s, nil
+}
+
+// acquireBlockRange takes a permit for block-range work, waiting for one if
+// none is free, and returns the function that gives it back.
+func (s *lwdStreamer) acquireBlockRange(ctx context.Context) (func(), error) {
+	if s.permits == nil {
+		return func() {}, nil
+	}
+	// Fires at whichever comes first, our cap or the client's own deadline, so
+	// a client that set one is never held past it.
+	waitCtx, cancel := context.WithTimeout(ctx, blockRangeWait)
+	defer cancel()
+	select {
+	case s.permits <- struct{}{}:
+		return func() { <-s.permits }, nil
+	case <-waitCtx.Done():
+		if ctx.Err() != nil {
+			// The client gave up rather than us running out of patience.
+			return nil, ctx.Err()
+		}
+		// Unavailable, not ResourceExhausted: wallet clients retry the former
+		// with backoff and surface the latter as a hard error.
+		return nil, status.Error(codes.Unavailable,
+			"too many concurrent block-range requests; retry shortly")
+	}
 }
 
 // DarksideStreamer holds the gRPC state for darksidewalletd.
@@ -299,6 +337,11 @@ func (s *lwdStreamer) GetBlockRange(span *walletrpc.BlockRange, resp walletrpc.C
 			"GetBlockRange: must specify start and end heights")
 	}
 	ctx := resp.Context()
+	release, err := s.acquireBlockRange(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	blockChan := make(chan *walletrpc.CompactBlock)
 	errChan := make(chan error)
 	go common.GetBlockRange(ctx, s.cache, blockChan, errChan, span)
@@ -339,6 +382,11 @@ func (s *lwdStreamer) GetBlockRangeNullifiers(span *walletrpc.BlockRange, resp w
 	}
 	span.PoolTypes = filtered
 	ctx := resp.Context()
+	release, err := s.acquireBlockRange(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	blockChan := make(chan *walletrpc.CompactBlock)
 	errChan := make(chan error)
 	go common.GetBlockRange(ctx, s.cache, blockChan, errChan, span)
@@ -555,6 +603,44 @@ func (s *lwdStreamer) GetLightdInfo(ctx context.Context, in *walletrpc.Empty) (*
 		return nil, status.Errorf(codes.Internal, "GetLightdInfo failed: %s", err.Error())
 	}
 	return lightdinfo, err
+}
+
+// GetStandardFee returns the ZIP 317 marginal fee, in zatoshis per
+// logical action, via the backend's `getstandardfee` JSON-RPC method.
+func (s *lwdStreamer) GetStandardFee(ctx context.Context, in *walletrpc.Empty) (*walletrpc.StandardFee, error) {
+	common.Log.Debugf("gRPC GetStandardFee(%+v)\n", in)
+	result, err := common.RawRequest(ctx, "getstandardfee", []json.RawMessage{})
+	if err != nil {
+		// A backend without this RPC fails with JSON-RPC method-not-found.
+		// Return Unimplemented (non-retryable), not Unavailable.
+		var rpcErr *btcjson.RPCError
+		if errors.As(err, &rpcErr) && rpcErr.Code == btcjson.ErrRPCMethodNotFound.Code {
+			return nil, status.Errorf(codes.Unimplemented,
+				"GetStandardFee: the backend does not support the getstandardfee RPC: %s", err.Error())
+		}
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, status.Errorf(codes.Unavailable,
+			"GetStandardFee: getstandardfee failed: %s", err.Error())
+	}
+	var reply struct {
+		StandardFee uint64 `json:"standard_fee"`
+		Version     uint32 `json:"version"`
+	}
+	if err := json.Unmarshal(result, &reply); err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"GetStandardFee: failed to parse getstandardfee reply: %s", err.Error())
+	}
+	if reply.StandardFee == 0 {
+		// A sane backend never reports a zero fee.
+		return nil, status.Error(codes.Internal,
+			"GetStandardFee: the backend reported a zero standard fee")
+	}
+	return &walletrpc.StandardFee{
+		FeeZat:           reply.StandardFee,
+		EstimatorVersion: reply.Version,
+	}, nil
 }
 
 // maxRawTxSize bounds the raw transaction bytes lightwalletd will forward to

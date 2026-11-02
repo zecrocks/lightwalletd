@@ -13,7 +13,9 @@ jobs:
 
     strategy:
       matrix:
-        go-version: ['>=1.22.2']
+        # Go 1.27.3 blocks the compromised eMudhra intermediate CA keys
+        # (CVE-2026-111943). Do not relax this to an older toolchain.
+        go-version: ['1.27.3']
 
     steps:
       - name: Check out code
