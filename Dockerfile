@@ -1,6 +1,6 @@
-# Go 1.27.3 blocks the compromised eMudhra intermediate CA keys
+# Go 1.27.3 and later block the compromised eMudhra intermediate CA keys
 # (CVE-2026-111943), and go.mod requires it. Do not relax this.
-FROM golang:1.27.3-alpine AS builder
+FROM golang:1.27.4-alpine AS builder
 
 RUN apk add --no-cache make git
 
