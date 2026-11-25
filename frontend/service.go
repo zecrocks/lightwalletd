@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"os"
 	"regexp"
 	"slices"
@@ -242,6 +243,14 @@ func (s *lwdStreamer) GetTaddressTransactions(addressBlockFilter *walletrpc.Tran
 		tx, err := s.GetTransaction(timeout, &walletrpc.TxFilter{Hash: txHash})
 		if err != nil {
 			return err
+		}
+		// Chain state can change between the address-index query and this
+		// lookup. Only emit transactions still mined in the requested range;
+		// zero and MaxUint64 are the mempool and side-chain sentinels.
+		if tx.Height == 0 || tx.Height == math.MaxUint64 || tx.Height < start || tx.Height > end {
+			return status.Errorf(codes.Aborted,
+				"GetTaddressTransactions: transaction %s has height %d inconsistent with mined range [%d, %d]; retry request",
+				txidstr, tx.Height, start, end)
 		}
 		if err = resp.Send(tx); err != nil {
 			return err
@@ -578,8 +587,17 @@ func (s *lwdStreamer) GetTransaction(ctx context.Context, txf *walletrpc.TxFilte
 		params := []json.RawMessage{txidJSON, json.RawMessage("1")}
 		result, rpcErr := common.RawRequest(ctx, "getrawtransaction", params)
 		if rpcErr != nil {
-			// For some reason, the error responses are not JSON
-			return nil, status.Errorf(codes.NotFound,
+			// Retain NotFound only for the backend's structured transaction
+			// lookup error, not transport failures or other RPC errors.
+			if errors.Is(rpcErr, context.Canceled) || errors.Is(rpcErr, context.DeadlineExceeded) {
+				return nil, status.FromContextError(rpcErr).Err()
+			}
+			code := codes.Unknown
+			var backendErr *btcjson.RPCError
+			if errors.As(rpcErr, &backendErr) && backendErr.Code == btcjson.ErrRPCNoTxInfo {
+				code = codes.NotFound
+			}
+			return nil, status.Errorf(code,
 				"GetTransaction: getrawtransaction %s failed: %s", txidHex, rpcErr.Error())
 		}
 		tx, err := common.ParseRawTransaction(result)
@@ -758,7 +776,7 @@ func getTaddressBalanceZcashdRpc(ctx context.Context, addressList []string) (*wa
 
 	result, rpcErr := common.RawRequest(ctx, "getaddressbalance", params)
 	if rpcErr != nil {
-		var code codes.Code
+		code := codes.Unknown
 		switch {
 		case strings.Contains(rpcErr.Error(), "Invalid address"):
 			code = codes.InvalidArgument
@@ -1142,7 +1160,7 @@ func getAddressUtxos(ctx context.Context, arg *walletrpc.GetAddressUtxosArg, f f
 	params := []json.RawMessage{param}
 	result, rpcErr := common.RawRequest(ctx, "getaddressutxos", params)
 	if rpcErr != nil {
-		var code codes.Code
+		code := codes.Unknown
 		switch {
 		case strings.Contains(rpcErr.Error(), "Invalid address"):
 			code = codes.InvalidArgument
